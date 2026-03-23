@@ -2,7 +2,7 @@
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-23
-**Status:** PROPOSAL -- for team review
+**Status:** ACTIVE -- M0 complete, M1 in progress
 
 ---
 
@@ -85,37 +85,35 @@ These are requirements that flow directly from DSRP and cannot be compromised:
 
 ## 4. MVP Milestone Breakdown
 
-### M0: Foundation
+### M0: Foundation -- COMPLETE
 **Goal:** Technical scaffolding -- app shell, canvas rendering, database connection.
 
-| Deliverable | Owner | Details |
-|---|---|---|
-| DSRP data model specification | Derek | Formal spec for how D and S map to tables/columns. Defines what Silas builds. |
-| Database schema v2 (DSRP-native) | Silas | New schema replacing current PKM schema. Must support: nodes with content, parent-child nesting (arbitrary depth), spatial position (x, y, width, height), map/canvas containers. |
-| App shell + canvas rendering | Wren | Electron/Tauri app shell with an infinite canvas. Render rectangles on screen. Pan and zoom. No interactivity yet. |
-| Tech stack decision | Team | Decide on canvas rendering approach (see Section 6). |
-
-**Dependencies:** Derek's spec must be complete before Silas starts schema work. Tech stack decision must be made before Wren starts building. Silas and Wren can work in parallel once their inputs are ready.
+| Deliverable | Owner | Status | Details |
+|---|---|---|---|
+| DSRP data model specification | Derek | DONE | `docs/dsrp-data-model-spec.md` |
+| Database schema v2 (DSRP-native) | Silas | DONE | `data/dsrp_schema.sql` -- three-table model: `nodes`, `maps`, `layout` |
+| Canvas framework prototype spike | Wren | DONE | `src/prototype/custom-react-canvas/` and `src/prototype/tldraw-nested/` evaluated |
+| Tech stack decision: Canvas | Team | RESOLVED | **Custom React + CSS Transforms.** Wren's recommendation; only approach that naturally enforces the truthful boundary requirement. tldraw rejected. |
+| Tech stack decision: App shell | Team | RESOLVED | **Tauri (v2.x).** Rust backend owns SQLite. Smaller footprint, cleaner local-first architecture. |
 
 **Testable output:** An app window opens with a pannable, zoomable canvas. The database exists and can store/retrieve nodes.
 
 ---
 
-### M1: Cards on Canvas
-**Goal:** Users can create, edit, move, and delete cards on the canvas.
+### M1: Cards on Canvas -- IN PROGRESS
+**Goal:** Users can create, edit, move, resize, and delete cards on the canvas. Every operation persists immediately to SQLite via Tauri IPC.
+
+**Stack:** Custom React + CSS Transforms (canvas), Tauri v2 (shell), SQLite via Rust backend.
 
 | Deliverable | Owner | Details |
 |---|---|---|
-| Create card (click to create) | Wren | Click on canvas to create a new card at that position. |
-| Edit card text | Wren | Click on a card to enter edit mode. Type text. Save on blur/Enter. |
-| Move card (drag) | Wren | Drag cards to reposition on canvas. |
-| Resize card (manual) | Wren | Drag edges/corners to resize. |
-| Delete card | Wren | Select + delete key, or context menu. |
-| CRUD persistence | Silas/Wren | All operations persist to SQLite immediately (or on debounce). |
+| Production canvas app (hardened from prototype) | Wren | Transfer `src/prototype/custom-react-canvas/` engine to `src/`. Wire to Tauri IPC. Add zoom-to-fit, breadcrumb stub, error handling. |
+| Tauri IPC CRUD layer | Silas | Rust `#[tauri::command]` functions: `get_map_nodes`, `create_node`, `update_node_content`, `update_node_layout`, `delete_node`. Default map init on first run. WAL + FK pragmas on every connection. |
+| DSRP compliance review | Derek | Verify: no `is_container` flag, `parent_id` vs. layout separation enforced, cards are typeless Distinctions. Sign off before M1 closes. |
 
-**Dependencies:** Requires M0 complete.
+**Dependencies:** Requires M0 complete. Silas and Wren run in parallel; Wren stubs persistence until Silas delivers IPC layer.
 
-**Testable output:** A user can create several cards, type in them, drag them around, and close/reopen the app to find them where they left them.
+**Testable output:** A user can create several cards, type in them, drag them around, resize them, and close/reopen the app to find them where they left them.
 
 ---
 
@@ -198,33 +196,27 @@ Derek (DSRP Spec)
 
 ---
 
-## 6. Key Technical Decisions to Make Early
+## 6. Key Technical Decisions
 
-These decisions are blocking. Each has real trade-offs and must be resolved before dependent work can begin.
+Both decisions were resolved during M0. No open decisions remain for M1 or M2.
 
-### Decision 1: Canvas Rendering Technology
+### Decision 1: Canvas Rendering Technology -- RESOLVED
 
-| Option | Pros | Cons |
-|---|---|---|
-| **HTML/CSS + DOM** (e.g., React with absolute positioning) | Familiar tech, easy text editing, accessibility built in, huge ecosystem | Performance ceiling with many elements, nested DOM can get complex, harder infinite canvas |
-| **Canvas 2D / WebGL** (e.g., PixiJS, Konva, Fabric.js) | High performance, smooth pan/zoom, good for many elements | Text editing is hard (need overlay), accessibility needs custom work, more low-level code |
-| **Hybrid** (e.g., React Flow, tldraw, Excalidraw fork) | Best of both worlds, proven whiteboard patterns, active communities | Dependency on upstream project decisions, may need heavy customization for nesting |
-| **SVG-based** (e.g., D3 + SVG) | Good for structured graphics, supports both vector and text | Performance with many elements, complex nesting in SVG foreignObject |
+**Decision: Custom React + CSS Transforms.**
 
-**Recommendation:** Evaluate **tldraw** (MIT-licensed, built for exactly this kind of whiteboard app) and **React Flow** (strong for node-based UIs). Both are hybrid approaches. The key question is whether either handles recursive nesting natively or whether we need to build that on top. This requires a spike/prototype before M0 can proceed.
+Wren prototyped two candidates: tldraw and Custom React + CSS Transforms. React Flow was evaluated and rejected early (designed for node-graph DAGs, no concept of spatial containment). Full evaluation in `docs/canvas-framework-evaluation.md`.
 
-**DECISION NEEDED FROM TEAM:** Wren should prototype nested boxes in 2 candidate frameworks and report back before the canvas architecture is committed.
+**Why Custom React won:** tldraw's frame model does not support auto-resize natively -- frames are fixed-size containers that clip children. Implementing Plectica's truthful boundary requirement (child always visually inside parent; parent auto-expands bidirectionally) required overriding tldraw's core interaction handlers. The custom approach implements auto-resize as a first-class constraint with zero framework friction. Every other criterion (drag-to-nest, drag-to-unnest, deep nesting) also favored the custom approach. tldraw's advantages (built-in pan/zoom, undo/redo) are buildable and were not deciding factors.
 
-### Decision 2: Application Shell
+**Working prototype:** `src/prototype/custom-react-canvas/` (~950 lines TypeScript, functional, 5-level nesting demonstrated).
 
-| Option | Pros | Cons |
-|---|---|---|
-| **Electron** | Mature, huge ecosystem, proven for desktop apps (VS Code, Figma desktop) | Large bundle size, memory usage, "another Electron app" |
-| **Tauri** | Tiny bundle, Rust backend, better performance, modern | Younger ecosystem, Rust learning curve for backend logic, fewer community resources |
+### Decision 2: Application Shell -- RESOLVED
 
-**Recommendation:** Tauri is the stronger choice for a local-first app where performance matters and we do not need Node.js server-side. But this depends on team comfort with Rust. If the team is JavaScript-only, Electron is the safer bet.
+**Decision: Tauri v2.x.**
 
-**DECISION NEEDED FROM TEAM:** What is our Rust comfort level?
+Wren's recommendation, accepted by the team. Rationale: Tauri's Rust backend owns the SQLite connection directly (`rusqlite`), with no Node.js wrapper layer. For a local-first app where the database is the source of truth, the shorter path to SQLite is an architectural advantage. ~30-40MB memory footprint vs. Electron's ~200-300MB. Sub-10MB distributable. Tauri 2.0 is production-stable.
+
+**Architecture:** Frontend is 100% TypeScript/React. Rust surface area is small: ~5 IPC commands for CRUD operations. IPC layer is a clean TypeScript abstraction (`db.*` interface) so the canvas code never calls Tauri APIs directly.
 
 ### Decision 3: Database Schema Approach for Nesting
 
@@ -274,15 +266,15 @@ Cards need position and size. Options:
 
 These need answers before or during MVP development.
 
-### Must Resolve Before M0 Can Complete
+### Resolved in M0
 
-| # | Question | Who Answers | Impact |
-|---|---|---|---|
-| Q1 | What canvas framework best supports recursive nesting? Requires a prototype spike. | Wren | Determines entire frontend architecture. Blocks all of Wren's M0+ work. |
-| Q2 | Does the DSRP data model require relationships to be first-class entities (their own nodes) even at MVP? Or can they be simple edges? | Derek | Impacts schema design -- if relationships are nodes, the schema is more complex from day one. Blocks Silas's schema. |
-| Q3 | Should a "map" be a special node (a root-level System), or a separate entity? | Derek/Silas | Impacts schema design and how maps relate to DSRP theory. Blocks Silas's schema. |
-| Q4 | What is the current state of the codebase? Is there any existing app code, or are we starting from scratch? | Larry | Impacts scope of M0. |
-| Q5 | Electron or Tauri? | Wren/Larry | Impacts dependencies and build pipeline. Blocks Wren's app shell work. |
+| # | Question | Answer |
+|---|---|---|
+| Q1 | What canvas framework best supports recursive nesting? | **Custom React + CSS Transforms.** See `docs/canvas-framework-evaluation.md`. |
+| Q2 | Does the DSRP data model require relationships to be first-class entities at MVP? | **No, but the schema must not foreclose it.** `node_type DEFAULT 'card'` from day one; Phase 2 adds `'relationship'` without migration. No `links` table in Phase 1. Answered by Derek in `docs/dsrp-data-model-spec.md`. |
+| Q3 | Should a map be a special node or a separate entity? | **Separate entity (`maps` table).** Top-level cards have `parent_id = NULL`; they are placed on a map via the `layout` table but not structurally contained by it. Answered by Derek in `docs/dsrp-data-model-spec.md`. |
+| Q4 | What is the current state of the codebase? | Existing POC in `poc/` (Flask/PKM app). Not reused. Plectica 2.0 is greenfield in `src/`. |
+| Q5 | Electron or Tauri? | **Tauri v2.x.** See Decision 2 above. |
 
 ### Can Resolve During M1-M2 (Non-Blocking at M0)
 

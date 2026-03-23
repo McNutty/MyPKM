@@ -14,6 +14,12 @@ if echo "$FILE_PATH" | grep -qiE '(CLAUDE\.md|memory/|roster\.md|\.claude/hooks|
   exit 0
 fi
 
+# Allow edits to docs/ -- these are always written by delegated agents (Maren, Derek, Wren, Silas, etc.), not Larry directly
+# Match both forward slashes (/docs/) and Windows backslashes (\docs\)
+if echo "$FILE_PATH" | grep -qiE '[/\\]docs[/\\]'; then
+  exit 0
+fi
+
 # Block edits to project code/data files
 if echo "$FILE_PATH" | grep -qiE '\.(py|html|css|js|sql|db|json|md)$'; then
   echo "LARRY: You're about to edit a project file directly. Remember your core rule -- delegate this to the right team member (Wren for UI, Silas for database, etc.)."
