@@ -1,343 +1,247 @@
-# PKM Database Schema
+# Plectica 2.0 — DSRP-Native Schema
 
-**File:** `data/pkm.db`
-**Engine:** SQLite 3 — WAL mode, FTS5, JSON1, foreign keys enforced
+**File:** `data/dsrp_schema.sql` (source of truth)
+**Database:** `data/pkm.db` (gitignored)
+**Engine:** SQLite 3 — WAL mode, foreign keys enforced
 **Author:** Silas, PKM Database Architect
+**Spec:** `docs/dsrp-data-model-spec.md` (Derek, 2026-03-23)
 **Created:** 2026-03-23
+**Phase:** 1 MVP — Distinctions + Systems
 
 ---
 
 ## Overview
 
-This database is the storage layer for a personal knowledge management (PKM) system — a "second brain" for notes, ideas, bookmarks, clippings, and references. The design is deliberately practical: enough structure to be powerful from day one, with clear extension points for growth.
+This is the DSRP-native database schema for Plectica 2.0. Every design decision is grounded in DSRP theory. The schema implements Phase 1: Distinctions (nodes) and Systems (part-whole hierarchy via `parent_id`). Relationships (R) and Perspectives (P) are deferred — see Section 7 of the spec for details.
 
-### Design Principles
+The full annotated DDL, with inline DSRP rationale, lives in `data/dsrp_schema.sql`. This document summarizes each table, documents all constraints, and provides the key query patterns for application developers.
 
-- **Atomic notes first.** The `notes` table is the center of gravity. Everything else orbits it.
-- **Explicit relationships.** Links between notes are first-class records (typed, annotatable), not just wikilink syntax buried in body text.
-- **Hierarchical but optional.** Tags and collections both support parent-child nesting, but neither requires it.
-- **Full-text search built in.** FTS5 with Porter stemming indexes every note automatically via triggers — no application-side indexing needed.
-- **JSON escape hatches.** Every core table has a `metadata TEXT` column (JSON) for extensibility without schema migrations.
-- **Timestamps everywhere.** Every table has `created_at` and `updated_at` in ISO 8601 UTC, maintained by triggers.
+### DSRP-to-Data Mapping Summary
 
----
-
-## Entity-Relationship Summary
-
-```
-collections (tree)
-    |
-    | 1:N
-    v
-  notes  <---M:N---> tags (tree)
-    |  \
-    |   \---M:N---> sources
-    |
-    | M:N (self)
-  links (note -> note, typed)
-```
-
----
-
-## Tables
-
-### `notes`
-
-The atomic unit of the second brain. One note = one idea (or one bookmark, clipping, journal entry, etc.).
-
-| Column | Type | Notes |
+| DSRP Concept | Data Representation | Location |
 |---|---|---|
-| `id` | INTEGER PK | Auto-increment |
-| `collection_id` | INTEGER FK | Optional — which collection this belongs to |
-| `source_id` | INTEGER FK | Optional — primary source (shortcut; use `note_sources` for multiple) |
-| `title` | TEXT | Required |
-| `slug` | TEXT UNIQUE | Human-readable URL key (optional, nullable) |
-| `body` | TEXT | Markdown body |
-| `summary` | TEXT | Short abstract, hand-written or auto-generated |
-| `kind` | TEXT | `note`, `idea`, `reference`, `bookmark`, `clipping`, `journal`, `moc` |
-| `status` | TEXT | `draft`, `in_progress`, `evergreen`, `archived` |
-| `source_url` | TEXT | Direct URL for bookmarks/clippings |
-| `clipped_text` | TEXT | Raw quote for `kind = 'clipping'` |
-| `clipped_at` | TEXT | ISO 8601 — when the clip was taken |
-| `is_pinned` | INTEGER | Boolean 0/1 |
-| `metadata` | TEXT | JSON blob for arbitrary extra fields |
+| Distinction | A row in `nodes` | `nodes` table |
+| Distinction identity | Stable integer primary key | `nodes.id` |
+| Distinction boundary / label | Text content of the card | `nodes.content` |
+| System (whole) | Node whose `id` is referenced as `parent_id` by another | Relational fact on `nodes` |
+| System (part) | Node with non-null `parent_id` | `nodes.parent_id` |
+| Part-whole relationship | FK from child to parent | `nodes.parent_id` |
+| Top-level Distinction | Node with `parent_id IS NULL` | `nodes.parent_id` IS NULL |
+| Map / canvas | Row in `maps` | `maps` table |
+| Spatial position | Row in `layout` | `layout` table |
+| Relationship (R) | **Not implemented — Phase 2** | — |
+| Perspective (P) | **Not implemented — Phase 3** | — |
 
-**Note kinds:**
-- `note` — processed, atomic, evergreen-candidate idea
-- `idea` — fleeting/unprocessed thought, needs review
-- `reference` — pointer to external knowledge (book chapter, paper, etc.)
-- `bookmark` — saved URL with optional annotation
-- `clipping` — extracted quote or excerpt from a source
-- `journal` — daily or periodic log entry
-- `moc` — Map of Content: an index note that links to other notes
+### Key Design Principles
 
-**Note statuses** (Zettelkasten maturity ladder):
-- `draft` → `in_progress` → `evergreen` → `archived`
-
----
-
-### `tags`
-
-Hierarchical tags. A tag can have a parent, enabling taxonomy trees.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `parent_id` | INTEGER FK | Self-reference for nesting; NULL = top-level |
-| `name` | TEXT | Display name |
-| `slug` | TEXT UNIQUE | Lowercase, hyphenated, URL-safe |
-| `description` | TEXT | What this tag means |
-| `color` | TEXT | Hex color for UI |
-
-**Example hierarchy:**
-```
-programming (slug: programming)
-  ├── python (slug: python)
-  │     └── async (slug: python-async)
-  └── databases (slug: databases)
-```
-
-To fetch a full ancestry path, use a recursive CTE:
-```sql
-WITH RECURSIVE ancestry(id, name, depth) AS (
-    SELECT id, name, 0 FROM tags WHERE id = :tag_id
-    UNION ALL
-    SELECT t.id, t.name, a.depth + 1
-    FROM tags t JOIN ancestry a ON t.id = (SELECT parent_id FROM tags WHERE id = a.id)
-)
-SELECT * FROM ancestry ORDER BY depth DESC;
-```
-
----
-
-### `collections`
-
-Organizational containers following a PARA-inspired structure. Self-referential for sub-collections.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `parent_id` | INTEGER FK | Self-reference for nesting |
-| `kind` | TEXT | `project`, `area`, `resource`, `archive`, `inbox` |
-| `name` | TEXT | Display name |
-| `description` | TEXT | |
-| `color` | TEXT | Hex color |
-| `icon` | TEXT | Emoji or icon name |
-| `is_archived` | INTEGER | Boolean 0/1 |
-| `sort_order` | INTEGER | Manual ordering |
-
-**Seeded defaults:**
-
-| ID | Kind | Name |
-|---|---|---|
-| 1 | inbox | Inbox |
-| 2 | area | Personal |
-| 3 | area | Work |
-| 4 | resource | Library |
-| 5 | archive | Archive |
-
----
-
-### `sources`
-
-Where knowledge comes from. Books, articles, URLs, podcasts, papers, conversations.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `kind` | TEXT | `book`, `article`, `website`, `video`, `podcast`, `paper`, `tweet`, `conversation`, `other` |
-| `title` | TEXT | Required |
-| `author` | TEXT | |
-| `url` | TEXT | |
-| `isbn` | TEXT | For books |
-| `published_at` | TEXT | ISO 8601 date of original publication |
-| `accessed_at` | TEXT | ISO 8601 when retrieved/read |
-| `notes` | TEXT | Free-form annotation |
-| `metadata` | TEXT | JSON for kind-specific extras (e.g., episode number, DOI) |
-
----
-
-### `links`
-
-Directed, typed edges between notes. The graph layer.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `from_id` | INTEGER FK | Source note |
-| `to_id` | INTEGER FK | Target note |
-| `kind` | TEXT | `related`, `supports`, `contradicts`, `extends`, `summarizes`, `inspired_by` |
-| `annotation` | TEXT | Optional note about the relationship |
-
-**Bidirectional queries** — to find all notes connected to note X:
-```sql
-SELECT id, title FROM notes
-WHERE id IN (
-    SELECT to_id   FROM links WHERE from_id = :x
-    UNION
-    SELECT from_id FROM links WHERE to_id   = :x
-);
-```
-
-**Unique constraint:** `(from_id, to_id, kind)` — the same pair can have multiple link types but not duplicate types.
-
----
-
-### `note_tags` (junction)
-
-Many-to-many relationship between notes and tags.
-
-| Column | Type |
-|---|---|
-| `note_id` | INTEGER FK (PK part) |
-| `tag_id` | INTEGER FK (PK part) |
-| `created_at` | TEXT |
-
----
-
-### `note_sources` (junction)
-
-Many-to-many relationship between notes and sources. Use this when a note draws from multiple sources. The `source_id` on `notes` is a convenience shortcut for the primary/single source.
-
-| Column | Type | Notes |
-|---|---|---|
-| `note_id` | INTEGER FK (PK part) | |
-| `source_id` | INTEGER FK (PK part) | |
-| `page_ref` | TEXT | Page number, timestamp, chapter |
-| `quote` | TEXT | Specific quote from that source |
-
----
-
-## Full-Text Search (FTS5)
-
-The `notes_fts` virtual table indexes `title`, `body`, and `summary` from the `notes` table using the Porter stemmer with Unicode normalization and diacritic removal.
-
-Three triggers (`notes_fts_insert`, `notes_fts_update`, `notes_fts_delete`) keep it in sync automatically.
-
-**Basic search:**
-```sql
-SELECT n.id, n.title, n.kind, n.status
-FROM notes_fts f
-JOIN notes n ON n.id = f.rowid
-WHERE notes_fts MATCH 'zettelkasten atomic'
-ORDER BY rank;
-```
-
-**Phrase search:**
-```sql
-WHERE notes_fts MATCH '"second brain"'
-```
-
-**Column-scoped search:**
-```sql
-WHERE notes_fts MATCH 'title: productivity'
-```
-
-**Ranked results with snippet:**
-```sql
-SELECT n.id, n.title,
-       snippet(notes_fts, 1, '<b>', '</b>', '...', 20) AS excerpt
-FROM notes_fts f
-JOIN notes n ON n.id = f.rowid
-WHERE notes_fts MATCH 'knowledge management'
-ORDER BY rank;
-```
-
----
-
-## Indexes
-
-| Index | Table | Column(s) | Purpose |
-|---|---|---|---|
-| `idx_notes_collection` | notes | collection_id | Filter by collection |
-| `idx_notes_source` | notes | source_id | Filter by source |
-| `idx_notes_kind` | notes | kind | Filter by note type |
-| `idx_notes_status` | notes | status | Filter by maturity |
-| `idx_notes_pinned` | notes | is_pinned (partial) | Fast pinned-only queries |
-| `idx_notes_created` | notes | created_at | Chronological ordering |
-| `idx_tags_slug` | tags | slug | Tag lookup by slug |
-| `idx_tags_parent` | tags | parent_id | Tag tree traversal |
-| `idx_collections_parent` | collections | parent_id | Collection tree traversal |
-| `idx_links_from` | links | from_id | Outgoing link lookup |
-| `idx_links_to` | links | to_id | Incoming link lookup |
-| `idx_note_tags_tag` | note_tags | tag_id | Notes-by-tag lookup |
-| `idx_note_sources_source` | note_sources | source_id | Notes-by-source lookup |
-
----
-
-## Common Query Patterns
-
-### All notes in a collection, newest first
-```sql
-SELECT id, title, kind, status, created_at
-FROM notes
-WHERE collection_id = 4
-ORDER BY created_at DESC;
-```
-
-### Notes tagged with a specific tag (by slug)
-```sql
-SELECT n.id, n.title
-FROM notes n
-JOIN note_tags nt ON nt.note_id = n.id
-JOIN tags t       ON t.id = nt.tag_id
-WHERE t.slug = 'insight';
-```
-
-### All tags on a note (with ancestry depth)
-```sql
-WITH RECURSIVE tag_tree(id, name, parent_id, depth) AS (
-    SELECT t.id, t.name, t.parent_id, 0
-    FROM tags t
-    JOIN note_tags nt ON nt.tag_id = t.id
-    WHERE nt.note_id = :note_id
-    UNION ALL
-    SELECT t.id, t.name, t.parent_id, tt.depth + 1
-    FROM tags t
-    JOIN tag_tree tt ON t.id = tt.parent_id
-)
-SELECT DISTINCT id, name, depth FROM tag_tree ORDER BY depth DESC;
-```
-
-### Orphan notes (no links in or out)
-```sql
-SELECT id, title FROM notes
-WHERE id NOT IN (SELECT from_id FROM links)
-  AND id NOT IN (SELECT to_id   FROM links)
-  AND status != 'archived';
-```
-
-### Notes referencing a source
-```sql
-SELECT DISTINCT n.id, n.title
-FROM notes n
-LEFT JOIN note_sources ns ON ns.note_id = n.id
-WHERE n.source_id = :source_id OR ns.source_id = :source_id;
-```
+- **No caste system among nodes.** Any node can be a parent. There is no `is_container`, `has_children`, or `can_have_children` column. These would be DSRP violations encoded directly in the database.
+- **`parent_id` is structural. x/y are visual. They never conflate.** The structural parent lives on `nodes`. The visual position lives on `layout`. These are correlated in Phase 1 but are not the same thing.
+- **Maps are not nodes.** A map is a viewing context, not a containing System. Top-level cards are not "parts of" a map. Maps are a separate table for this reason.
+- **Move = UPDATE `parent_id`. Never DELETE + INSERT.** Node IDs are permanent DSRP identities.
+- **`parent_id = NULL` is valid and correct** for a top-level card. It is not an error or an orphan.
 
 ---
 
 ## PRAGMA Settings
 
-Applied at database initialization:
+Applied at initialization and re-applied on every new connection (SQLite does not persist these across connections):
 
 | PRAGMA | Value | Reason |
 |---|---|---|
+| `foreign_keys` | ON | Enforce referential integrity absolutely |
 | `journal_mode` | WAL | Concurrent reads during writes; safer crash recovery |
-| `foreign_keys` | ON | Enforce referential integrity |
-| `auto_vacuum` | INCREMENTAL | Reclaim space incrementally rather than in full sweeps |
-
-The application must re-apply `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` on each new connection (SQLite does not persist these across connections).
 
 ---
 
-## Extension Points
+## Tables
 
-The schema is designed to grow without disruptive migrations:
+### `maps`
 
-- **`metadata` JSON columns** on `notes`, `sources`, and `collections` absorb new fields before they warrant a real column.
-- **`links.kind`** CHECK constraint can be expanded via `ALTER TABLE` to add new relationship types.
-- **`notes.kind`** and **`notes.status`** are similarly extensible.
-- **`collections.parent_id`** already supports unlimited nesting depth.
-- A future `embeddings` table (`note_id`, `model`, `vector BLOB`) can be added for semantic search without touching existing tables.
-- A `note_versions` table for audit history can be added referencing `notes.id` when needed.
+The canvas / workspace context for a session of DSRP thinking. A map is not a DSRP System node. It is the container for spatial layout records, not for nodes. Nodes are not children of maps structurally — they appear on maps via the `layout` table.
+
+| Column | Type | Constraints | DSRP Purpose |
+|---|---|---|---|
+| `id` | INTEGER | PRIMARY KEY | Stable map identity; referenced by `layout.map_id` |
+| `name` | TEXT | NOT NULL | User-visible canvas name. No uniqueness constraint — users may have two maps with the same name. |
+| `created_at` | TEXT | NOT NULL | ISO-8601 UTC timestamp |
+| `updated_at` | TEXT | NOT NULL | Updated on name change only. Layout changes update the `layout` row, not the map row. |
+
+---
+
+### `nodes`
+
+A node represents a DSRP Distinction. Every card on every map is a row in this table. The node's existence in the database is the act of Distinction-making.
+
+| Column | Type | Constraints | DSRP Purpose |
+|---|---|---|---|
+| `id` | INTEGER | PRIMARY KEY | Stable identity — survives moves, renames, restructuring. Never reassigned. |
+| `parent_id` | INTEGER | FK → `nodes(id)`, ON DELETE RESTRICT, nullable | The DSRP part-whole relationship. NULL = top-level Distinction (no containing System). Non-null = this node is a part of the referenced node. |
+| `content` | TEXT | NOT NULL DEFAULT '' | The Distinction boundary — what makes this thing this thing. Empty string is the "not yet labeled" state. NULL is never valid. |
+| `node_type` | TEXT | NOT NULL DEFAULT 'card', CHECK(node_type IN ('card')) | DSRP element type. Phase 1 only allows 'card'. Phase 2 will extend to 'relationship'. This is NOT a structural capability flag. |
+| `created_at` | TEXT | NOT NULL | ISO-8601 UTC |
+| `updated_at` | TEXT | NOT NULL | ISO-8601 UTC; updated on content or parent_id change |
+| `metadata` | TEXT | nullable | JSON blob for rendering hints, color/style overrides, app-level metadata not yet warranting its own column. Must be valid JSON or NULL — validated at the application layer. Do not use for structural or spatial data. |
+
+**Indexes:**
+
+| Index | Column | Purpose |
+|---|---|---|
+| `idx_nodes_parent_id` | `parent_id` | Most common structural query: "give me all children of node X." Makes WHERE parent_id = X O(number of children), not O(total nodes). |
+
+---
+
+### `layout`
+
+A layout row places a node on a map at a specific visual position. This is the only place spatial data lives. The separation of structural relationships (`parent_id` on `nodes`) from visual positions (this table) is a core architectural invariant.
+
+One row = one node appearing on one map. At MVP, a node appears at most once per map (UNIQUE constraint).
+
+A node with no layout rows exists in the database but is not currently visible on any canvas. This is a valid state.
+
+| Column | Type | Constraints | Purpose |
+|---|---|---|---|
+| `id` | INTEGER | PRIMARY KEY | Layout row identity; returned as `layout_id` in queries for use in drag-update writes |
+| `node_id` | INTEGER | NOT NULL, FK → `nodes(id)`, ON DELETE CASCADE | The node being placed |
+| `map_id` | INTEGER | NOT NULL, FK → `maps(id)`, ON DELETE CASCADE | The map this position belongs to |
+| `x` | REAL | NOT NULL | Canvas x-coordinate (canvas units, not pixels) |
+| `y` | REAL | NOT NULL | Canvas y-coordinate (canvas units, not pixels) |
+| `width` | REAL | NOT NULL, CHECK(width > 0) | Card width in canvas units |
+| `height` | REAL | NOT NULL, CHECK(height > 0) | Card height in canvas units |
+
+**Table-level constraint:**
+
+| Constraint | Mechanism | Purpose |
+|---|---|---|
+| UNIQUE(node_id, map_id) | Unique constraint | MVP invariant: one node has exactly one unambiguous position per map |
+
+**Indexes:**
+
+| Index | Column | Purpose |
+|---|---|---|
+| `idx_layout_map_id` | `map_id` | Most common layout query: "give me all nodes on map X" |
+| `idx_layout_node_id` | `node_id` | Node-to-map lookup: "is this node on any map, and which?" |
+
+---
+
+## Constraint Inventory
+
+### Database-Enforced Constraints
+
+| Constraint | Mechanism | Rationale |
+|---|---|---|
+| `nodes.parent_id` references a valid node ID or NULL | FK `REFERENCES nodes(id)` | Referential integrity. A node cannot point to a parent that does not exist. |
+| Deleting a parent with children is blocked | `ON DELETE RESTRICT` on `nodes.parent_id` | Prevents silent data loss. The application must explicitly resolve children (move or delete them) before deleting a parent. CASCADE is wrong here: it would silently destroy nested user thinking. |
+| `nodes.content` is never NULL | `NOT NULL DEFAULT ''` | Prevents query errors on content operations. Empty string is the correct "no label yet" state. |
+| `nodes.node_type` is a known value | `CHECK(node_type IN ('card'))` | Prevents invalid type values. Extend the CHECK list in Phase 2; do not remove the constraint. |
+| `layout.width > 0` and `layout.height > 0` | `CHECK` constraints | A zero or negative dimension is a rendering error, not a valid state. Caught at the data layer. |
+| Each node appears at most once per map | `UNIQUE(node_id, map_id)` on `layout` | MVP invariant: unambiguous single position per node per map. |
+| Deleting a node removes its layout rows | `ON DELETE CASCADE` on `layout.node_id` | Layout data for a non-existent node is meaningless. Layout rows have no independent existence. |
+| Deleting a map removes its layout rows | `ON DELETE CASCADE` on `layout.map_id` | Same reasoning. The nodes themselves survive map deletion and may be re-placed later. |
+
+### Application-Layer Constraints
+
+| Constraint | Mechanism | Rationale |
+|---|---|---|
+| No cycles in the `parent_id` chain | Pre-write cycle detection query (see below) | SQLite CHECK constraints cannot express recursive conditions. Must run before any UPDATE that sets a `parent_id`. |
+| Child visual bounds fit within parent visual bounds | Canvas rendering layer (Wren) | A rendering invariant, not a data invariant. The database stores whatever dimensions the app writes; the rendering layer enforces containment. |
+| `parent_id` and spatial position are never conflated | Code review + schema design | No database constraint prevents the app from deriving `parent_id` from layout positions. Enforced by design discipline and code review. |
+| `metadata` is valid JSON or NULL | JSON validation before write | SQLite has no native JSON type constraint. Validate in the application before writing. |
+| Move = UPDATE `parent_id`, never DELETE + INSERT | Code review + application pattern | The database cannot enforce this. The application must never DELETE a node to "move" it. This invariant preserves node IDs across all restructuring operations. |
+| `created_at` and `updated_at` are ISO-8601 UTC | Timestamp generation before write | SQLite stores TEXT; format is the application's responsibility. Always write UTC, always include 'Z' or '+00:00'. |
+
+---
+
+## Cycle Detection (Application Layer)
+
+Run the cycle detection query before every `UPDATE nodes SET parent_id = :proposed_parent_id`. Do not run it for `INSERT` with autoincrement IDs (the new node does not exist yet, so a cycle via INSERT is impossible). Do not run it when setting `parent_id = NULL` (removing a parent cannot create a cycle).
+
+**When to check:**
+
+| Operation | Check Required |
+|---|---|
+| INSERT node, parent_id = NULL (autoincrement) | No |
+| INSERT node, parent_id = X (autoincrement) | No — node doesn't exist yet |
+| INSERT node, parent_id = X (explicit id supplied) | Yes |
+| UPDATE parent_id from A to B | Yes |
+| UPDATE parent_id to NULL | No |
+
+**Usage pattern:**
+1. Run the cycle detection query with `:node_id` and `:proposed_parent_id`.
+2. If `cycle_exists = 1`: abort, return error to UI ("This move would create a circular containment, which is not allowed.").
+3. If `cycle_exists = 0`: proceed with UPDATE.
+4. Additional defense: check `proposed_parent_id != node_id` before running the full query (catches the self-parent case immediately).
+
+The full cycle detection query is included as a comment block in `data/dsrp_schema.sql`.
+
+---
+
+## Key Queries
+
+All six queries are included as commented examples in `data/dsrp_schema.sql`. Summary:
+
+| Query | Purpose |
+|---|---|
+| Query 1: Direct children of a node | Basic parent-child traversal; one level down |
+| Query 2: Full subtree (recursive CTE) | All descendants at all depths; includes depth column for tree reconstruction |
+| Query 3: Ancestor chain to root | Breadcrumb navigation; also underpins cycle detection |
+| Query 4: Top-level nodes on a map | Initial canvas render — `parent_id IS NULL` nodes with a layout row on the map |
+| Query 5: Single node with layout | Point lookup; returns `layout_id` for drag-update writes |
+| Query 6: Full subtree with layout (render query) | The primary render query — node :root_id and all descendants with positions on a given map |
+
+Query 6 is the most important and most complex. It is a recursive CTE joined to `layout` via LEFT JOIN (nodes in the subtree may not have a layout row on the current map). The rendering layer must handle `layout_id IS NULL` rows. Binding `:root_id` to a top-level node serves as the full-canvas initial load query.
+
+---
+
+## Deferred to Future Phases
+
+### Phase 2: Relationships (R)
+
+**Will add:**
+- `node_type` CHECK constraint extended to include `'relationship'`
+- A `relationship_edges` table: `(id, relationship_node_id, source_node_id, target_node_id, role)` where `role` is `'action'` or `'reaction'`
+- Relationship nodes are rows in `nodes` (same table, `node_type = 'relationship'`), giving them an ID, content (label on the line), and the ability to have children
+
+**Current schema is ready:** `node_type` column is already in `nodes`; the CHECK constraint just needs extending. No schema migration required.
+
+**What Phase 2 must not do:** Implement Relationships as a `links` table with no corresponding `nodes` row. That would deny Relationships their DSRP identity and make them non-extensible.
+
+### Phase 3: Perspectives (P)
+
+**Will likely add:**
+- A `perspectives` table, or an extension of the `maps` concept
+- The `layout` UNIQUE constraint `(node_id, map_id)` may evolve to `(node_id, perspective_id)`, or a parallel `perspective_layout` table is added
+
+**Current schema is ready:** The separate `layout` table (not spatial data on `nodes`) fully decouples node identity from visual appearance. The same node can appear in multiple maps/perspectives with different positions — only a new `map_id` (or `perspective_id`) is needed.
+
+### Full-Text Search (Post-MVP)
+
+**How to add** (do not add at MVP):
+
+```sql
+CREATE VIRTUAL TABLE nodes_fts USING fts5(
+    content,
+    content='nodes',
+    content_rowid='id'
+);
+```
+
+**Why deferred:** FTS adds write-time indexing overhead and rebuild complexity. For MVP, the node graph is small enough that a LIKE query on `nodes.content` is adequate.
+
+### Collaboration (Future)
+
+Integer autoincrement primary keys assigned by a single SQLite instance are incompatible with multi-user sync. A migration to UUID v4 or v7 is required before any collaboration feature ships. Do not add features that depend on cross-device node ID consistency (e.g., shareable links with node IDs) until this migration is complete.
+
+---
+
+## Invariants Quick Reference
+
+1. Every node row is a Distinction. It exists because a distinction was made between this thing and everything else.
+2. `parent_id = NULL` is valid and correct for a top-level card. It is not an error or orphan.
+3. No caste system. Any node can be a parent. Do not add `is_container`, `has_children`, or capability-controlling flags.
+4. `parent_id` is structural. x/y are visual. They never swap.
+5. Maps are not nodes. A map is a viewing context, not a containing System.
+6. Move = UPDATE `parent_id`. Never DELETE + INSERT. Node IDs are permanent identities.
+7. No cycles. Run the cycle detection query before every UPDATE to `parent_id`.
+8. UNIQUE(node_id, map_id) in `layout`. At MVP, a node appears exactly once per map.
+9. ON DELETE RESTRICT on `nodes.parent_id`. Resolve children before deleting a parent. No silent cascading deletion of user thinking.
+10. ON DELETE CASCADE on `layout`. Layout rows have no independent existence. They follow their node and map.
