@@ -1,0 +1,15 @@
+# Database
+data/pkm.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local/ephemeral files
+.claude/settings.local.json
+.claude/plans/
+
+# OS
+.DS_Store
+Thumbs.db
