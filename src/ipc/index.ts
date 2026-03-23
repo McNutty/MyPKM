@@ -8,6 +8,6 @@ export type { NodeWithLayout, DbInterface } from './db'
 // Both classes are statically imported but only one is instantiated,
 // so the unused class is tree-shaken in non-Tauri builds.
 // Top-level await is avoided: build target is es2021 (vite.config.ts).
-const isTauri = typeof window !== 'undefined' && '__TAURI__' in window
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 export const db: DbInterface = isTauri ? new TauriDb() : new StubDb()

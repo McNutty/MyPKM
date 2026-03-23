@@ -3,9 +3,9 @@
   "identifier": "com.plectica.app",
   "version": "0.1.0",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run --prefix ../src dev",
+    "beforeBuildCommand": "npm run --prefix ../src build",
+    "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
   "app": {

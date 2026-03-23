@@ -91,7 +91,7 @@ export default function App() {
       } catch (err) {
         if (cancelled) return
         console.error('[App] Failed to load map nodes:', err)
-        setError('Failed to load canvas data.')
+        setError(`Failed to load canvas data: ${err}`)
       } finally {
         if (!cancelled) setIsLoading(false)
       }
@@ -567,7 +567,7 @@ export default function App() {
         setError(null)
       } catch (err) {
         console.error('[App] Failed to create card:', err)
-        setError('Failed to create card.')
+        setError(`Failed to create card: ${err}`)
       }
     },
     [viewport]
