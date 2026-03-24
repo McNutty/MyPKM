@@ -7,10 +7,17 @@ interface RustRelationship {
   source_id: number
   target_id: number
   action: string
+  rel_node_id: number | null
 }
 
 function fromRust(r: RustRelationship): RelationshipData {
-  return { id: r.id, sourceId: r.source_id, targetId: r.target_id, action: r.action }
+  return {
+    id: r.id,
+    sourceId: r.source_id,
+    targetId: r.target_id,
+    action: r.action,
+    relNodeId: r.rel_node_id ?? null,
+  }
 }
 
 export class TauriDb implements DbInterface {

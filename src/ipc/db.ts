@@ -25,6 +25,8 @@ export interface RelationshipData {
   sourceId: number
   targetId: number
   action: string
+  /** ID of the companion node (node_type='relationship') backing this label. Null for legacy rows. */
+  relNodeId: number | null
 }
 
 export interface DbInterface {

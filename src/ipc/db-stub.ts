@@ -110,7 +110,9 @@ export class StubDb implements DbInterface {
     _mapId: number
   ): Promise<RelationshipData> {
     const id = this.nextRelId++
-    const rel: RelationshipData = { id, sourceId, targetId, action }
+    // Generate a fake relNodeId that won't collide with real node IDs in the stub.
+    const relNodeId = 100000 + id
+    const rel: RelationshipData = { id, sourceId, targetId, action, relNodeId }
     this.relationships.set(id, rel)
     return rel
   }

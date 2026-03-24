@@ -31,7 +31,11 @@ interface RelationshipLineProps {
   sourcePos: CardRect
   targetPos: CardRect
   isSelected: boolean
-  /** Whether this line's label is currently being edited (hides text label) */
+  /**
+   * Whether this line's label is currently being edited.
+   * When true, both the card label and the EditInput are hidden/shown
+   * respectively by the overlay -- the line itself doesn't change.
+   */
   isEditing: boolean
   onSelect: (relId: number) => void
   onEditStart: (relId: number) => void
@@ -142,24 +146,95 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
         style={{ cursor: 'pointer', pointerEvents: 'none' }}
       />
 
-      {/* Action label -- rendered as a foreignObject so we get HTML text */}
-      {!isEditing && (
-        <text
-          x={midX}
-          y={midY - 6}
-          textAnchor="middle"
-          fontSize={11}
-          fill={isSelected ? '#1976d2' : isUnlabeled ? '#aaa' : '#555'}
-          fontStyle={isUnlabeled ? 'italic' : 'normal'}
-          style={{ cursor: 'pointer', userSelect: 'none', pointerEvents: 'all' }}
-          onClick={handleLineClick}
-          onDoubleClick={handleLineDoubleClick}
-        >
-          {isUnlabeled ? 'unlabeled' : rel.action}
-        </text>
-      )}
-
     </>
+  )
+}
+
+/**
+ * RelationshipCard -- the HTML label element that sits on top of the SVG line
+ * at its midpoint. Rendered by RelationshipOverlay as a sibling of the SVG,
+ * positioned absolutely in the same canvas-transform coordinate space.
+ *
+ * Not draggable or nestable in M3 -- it stays anchored to the midpoint.
+ */
+interface RelationshipCardProps {
+  rel: RelationshipData
+  midX: number
+  midY: number
+  isSelected: boolean
+  isEditing: boolean
+  onSelect: (relId: number) => void
+  onEditStart: (relId: number) => void
+}
+
+export const RelationshipCard: React.FC<RelationshipCardProps> = ({
+  rel,
+  midX,
+  midY,
+  isSelected,
+  isEditing,
+  onSelect,
+  onEditStart,
+}) => {
+  const isUnlabeled = rel.action === ''
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      onSelect(rel.id)
+    },
+    [rel.id, onSelect]
+  )
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      onSelect(rel.id)
+      onEditStart(rel.id)
+    },
+    [rel.id, onSelect, onEditStart]
+  )
+
+  // Hide card while the EditInput is active -- the input takes its place.
+  if (isEditing) return null
+
+  return (
+    <div
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute',
+        left: midX,
+        top: midY,
+        transform: 'translate(-50%, -50%)',
+        // Width is clamped; content wraps if the label is long.
+        minWidth: 60,
+        maxWidth: 120,
+        padding: '2px 7px',
+        backgroundColor: '#fff',
+        border: `1px ${isUnlabeled ? 'dashed' : 'solid'} ${isSelected ? '#1976d2' : '#bdbdbd'}`,
+        borderRadius: 4,
+        fontSize: 11,
+        fontFamily: 'inherit',
+        fontStyle: isUnlabeled ? 'italic' : 'normal',
+        color: isSelected ? '#1976d2' : isUnlabeled ? '#aaa' : '#555',
+        textAlign: 'center',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        cursor: 'pointer',
+        userSelect: 'none',
+        // Sit above the SVG line (z=1) but below ghosts (z=10000)
+        zIndex: 2,
+        // Subtle shadow to lift it off the canvas
+        boxShadow: isSelected
+          ? '0 0 0 2px rgba(25,118,210,0.15)'
+          : '0 1px 3px rgba(0,0,0,0.10)',
+      }}
+    >
+      {isUnlabeled ? 'unlabeled' : rel.action}
+    </div>
   )
 }
 
@@ -298,6 +373,22 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
           </>
         )}
       </svg>
+
+      {/* Relationship label cards -- one HTML div per relationship, positioned
+          at the line midpoint. Rendered outside the SVG so they get proper
+          z-stacking and click/keyboard handling. */}
+      {lines.map(({ rel, midX, midY }) => (
+        <RelationshipCard
+          key={rel.id}
+          rel={rel}
+          midX={midX}
+          midY={midY}
+          isSelected={selectedRelId === rel.id}
+          isEditing={editingRelId === rel.id}
+          onSelect={onSelectRel}
+          onEditStart={onEditStart}
+        />
+      ))}
 
       {/* Inline label editor -- rendered as an HTML element positioned at the
           line midpoint so it gets proper focus/keyboard handling. The transform

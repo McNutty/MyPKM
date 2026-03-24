@@ -75,6 +75,7 @@ export interface RelationshipData {
   sourceId: number
   targetId: number
   action: string
+  relNodeId: number | null
 }
 
 /**
