@@ -2,7 +2,7 @@
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-23
-**Status:** ACTIVE -- M0 complete, M1 in progress
+**Status:** ACTIVE -- M0 complete, M1 complete, M2 in progress
 
 ---
 
@@ -100,7 +100,7 @@ These are requirements that flow directly from DSRP and cannot be compromised:
 
 ---
 
-### M1: Cards on Canvas -- IN PROGRESS
+### M1: Cards on Canvas -- COMPLETE
 **Goal:** Users can create, edit, move, resize, and delete cards on the canvas. Every operation persists immediately to SQLite via Tauri IPC.
 
 **Stack:** Custom React + CSS Transforms (canvas), Tauri v2 (shell), SQLite via Rust backend.
@@ -115,9 +115,12 @@ These are requirements that flow directly from DSRP and cannot be compromised:
 
 **Testable output:** A user can create several cards, type in them, drag them around, resize them, and close/reopen the app to find them where they left them.
 
+**DSRP review:** Approved by Derek (2026-03-23). See `docs/m1-derek-review.md`.
+
 ---
 
-### M2: Nesting -- The Core Mechanic
+### M2: Nesting -- The Core Mechanic -- IN PROGRESS
+**Kickoff doc:** `docs/m2-kickoff.md`
 **Goal:** Cards can be nested inside other cards. This is the hardest and most important milestone.
 
 | Deliverable | Owner | Details |
