@@ -597,8 +597,17 @@ export default function App() {
       // Normalize child positions (shift negative-coordinate children back inside padding).
       nextCards = normalizeChildPositions(nextCards, nestTargetId)
 
-      // Resize the new parent (and its ancestors) to contain the newly nested card.
-      nextCards = autoResizeParent(nextCards, nestTargetId)
+      // Issue 1 fix: resize bottom-up. If the card being nested is itself a
+      // parent with children, its own dimensions must be correct BEFORE we ask
+      // the new parent to fit around it. autoResizeParent(cardId) sizes the
+      // nested card based on its children, then walks up through nestTargetId
+      // and all further ancestors -- so one call handles the entire chain.
+      const nestedHasChildren = getChildren(nextCards, cardId).length > 0
+      if (nestedHasChildren) {
+        nextCards = autoResizeParent(nextCards, cardId)
+      } else {
+        nextCards = autoResizeParent(nextCards, nestTargetId)
+      }
       // Also resize the old parent if the card had one (it may now be smaller).
       if (card.parentId !== null) {
         nextCards = autoResizeParent(nextCards, card.parentId)
@@ -709,9 +718,18 @@ export default function App() {
           // Propagate depth change to all descendants.
           nextCards = updateDescendantDepths(nextCards, cardId, newDepth)
 
-          // Resize the old parent (may now be smaller) and the new parent.
+          // Issue 1 fix: resize bottom-up for unnest too. If the card being
+          // unnested has children, its own size may need correcting first.
+          // autoResizeParent(cardId) fixes the card itself then walks up to
+          // newParentId and beyond in a single upward pass.
+          const unnestHasChildren = getChildren(nextCards, cardId).length > 0
+          if (unnestHasChildren && newParentId !== null) {
+            nextCards = autoResizeParent(nextCards, cardId)
+          } else {
+            if (newParentId !== null) nextCards = autoResizeParent(nextCards, newParentId)
+          }
+          // Always resize the old parent -- the card left it, so it may shrink.
           if (c.parentId !== null) nextCards = autoResizeParent(nextCards, c.parentId)
-          if (newParentId !== null) nextCards = autoResizeParent(nextCards, newParentId)
 
           setCards(nextCards)
 
@@ -937,6 +955,17 @@ export default function App() {
   // RENDER
   // ---------------------------------------------------------------------------
 
+  // Issue 2: compute the single drop target ID for the current drag.
+  // Priority: explicit nest target > current parent of dragged card > none.
+  // This is passed into every Card so it can show the dashed blue indicator
+  // on exactly one card at a time.
+  const dropTargetId: number | null = (() => {
+    if (!dragState) return null
+    if (dragState.nestTargetId !== null) return dragState.nestTargetId
+    const dragged = cards.get(dragState.cardId)
+    return dragged?.parentId ?? null
+  })()
+
   const topLevelCards: CardData[] = []
   for (const card of cards.values()) {
     if (card.parentId === null) topLevelCards.push(card)
@@ -1124,8 +1153,8 @@ export default function App() {
                 draggingId={draggingId}
                 selectedId={selectedId}
                 newCardId={newCardId}
+                dropTargetId={dropTargetId}
                 onDragStart={handleCardDragStart}
-
                 onSelect={setSelectedId}
                 onContentChange={handleContentChange}
                 onAutoFocusConsumed={() => setNewCardId(null)}
@@ -1146,6 +1175,7 @@ export default function App() {
               draggingId={draggingId}
               selectedId={selectedId}
               newCardId={newCardId}
+              dropTargetId={dropTargetId}
               onDragStart={handleCardDragStart}
               onSelect={setSelectedId}
               onContentChange={handleContentChange}

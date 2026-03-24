@@ -31,6 +31,7 @@ interface CardProps {
   draggingId: number | null
   selectedId: number | null
   newCardId: number | null
+  dropTargetId: number | null
   onDragStart: (cardId: number, e: React.MouseEvent) => void
   onSelect: (cardId: number) => void
   onContentChange: (cardId: number, newContent: string) => void
@@ -46,6 +47,7 @@ export const Card: React.FC<CardProps> = React.memo(({
   draggingId,
   selectedId,
   newCardId,
+  dropTargetId,
   onDragStart,
   onSelect,
   onContentChange,
@@ -57,17 +59,10 @@ export const Card: React.FC<CardProps> = React.memo(({
   const isNestTarget = dragState?.nestTargetId === card.id
   const isSelected = selectedId === card.id
   const isDragging = dragState?.cardId === card.id
-  // Issue 2: show a blue container outline when a child of this card is being
-  // dragged inside it. Consistent with the nest-target highlight but distinct
-  // (dashed vs solid) so it reads as "this is the active container" rather
-  // than "this is a drop target".
-  const isActiveContainer =
-    !isNestTarget &&
-    dragState !== null &&
-    (() => {
-      const dragged = allCards.get(dragState.cardId)
-      return dragged?.parentId === card.id
-    })()
+  // Issue 2: unified drop target -- this card is where the dragged card will land.
+  // Either it's the explicit nest target (new parent on title-bar hover) or it's
+  // the current parent of the dragged card (card stays here when released).
+  const isDropTarget = dropTargetId === card.id
 
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(card.content)
@@ -186,9 +181,7 @@ export const Card: React.FC<CardProps> = React.memo(({
         width: card.width,
         height: card.height,
         backgroundColor: card.color,
-        border: isNestTarget
-          ? '3px solid #2196f3'
-          : isActiveContainer
+        border: isDropTarget
           ? '2px dashed #2196f3'
           : isSelected
           ? '2px solid #1976d2'
@@ -320,8 +313,8 @@ export const Card: React.FC<CardProps> = React.memo(({
               draggingId={draggingId}
               selectedId={selectedId}
               newCardId={newCardId}
+              dropTargetId={dropTargetId}
               onDragStart={onDragStart}
-
               onSelect={onSelect}
               onContentChange={onContentChange}
               onAutoFocusConsumed={onAutoFocusConsumed}
@@ -349,28 +342,14 @@ export const Card: React.FC<CardProps> = React.memo(({
         />
       )}
 
-      {/* Nest target highlight overlay */}
-      {isNestTarget && (
+      {/* Drop target highlight overlay -- shown for both nest targets and current-parent drop targets */}
+      {isDropTarget && (
         <div
           style={{
             position: 'absolute',
             inset: 0,
             borderRadius: 6,
-            backgroundColor: 'rgba(33, 150, 243, 0.1)',
-            pointerEvents: 'none',
-            zIndex: 999,
-          }}
-        />
-      )}
-
-      {/* Issue 2: active container overlay -- shows while a direct child is being dragged */}
-      {isActiveContainer && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            borderRadius: 6,
-            backgroundColor: 'rgba(33, 150, 243, 0.06)',
+            backgroundColor: 'rgba(33, 150, 243, 0.08)',
             pointerEvents: 'none',
             zIndex: 999,
           }}
