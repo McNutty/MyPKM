@@ -1,18 +1,21 @@
 /**
  * Card component -- renders a single card and recursively renders its children.
  *
- * Each card is a positioned <div> inside its parent's content area.
- * Children are rendered as nested divs. CSS `overflow: visible` allows children
- * to be seen even if they temporarily exceed the parent bounds (before
- * auto-resize kicks in).
+ * Layout structure:
+ *   ┌──────────────────────────────────┐
+ *   │ [Title text]          (n)        │  <- header row, always visible, always bordered
+ *   ├──────────────────────────────────┤  <- separator always present
+ *   │  child card                      │
+ *   │  child card                      │  <- children area (only present when card has parts)
+ *   └──────────────────────────────────┘
  *
- * The key insight: by using the DOM's natural nesting (div inside div),
- * coordinate transforms are AUTOMATIC. A child at (10, 10) inside a parent
- * at (100, 100) is automatically at (110, 110) in canvas space.
+ * Text (the Distinction label) lives in the header row, left-aligned.
+ * Children are stacked in the content area below the separator.
  *
- * Text editing: clicking the text area enters edit mode (<textarea>).
- * On blur or Enter (without Shift), the onContentChange callback fires and
- * the parent (App.tsx) persists to the DB.
+ * Coordinate note: children are absolutely positioned within the content area
+ * div, which sits directly below the header. getAbsolutePosition() in
+ * canvas-store adds HEADER_HEIGHT when crossing a parent boundary, matching
+ * this DOM offset.
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react'
@@ -23,24 +26,30 @@ interface CardProps {
   card: CardData
   allCards: Map<number, CardData>
   dragState: DragState | null
+  draggingId: number | null
   selectedId: number | null
+  newCardId: number | null
   onDragStart: (cardId: number, e: React.MouseEvent) => void
-  onResizeStart: (cardId: number, e: React.MouseEvent) => void
   onSelect: (cardId: number) => void
   onContentChange: (cardId: number, newContent: string) => void
+  onAutoFocusConsumed: () => void
   zoom: number
+  ghostZIndex?: number
 }
 
 export const Card: React.FC<CardProps> = React.memo(({
   card,
   allCards,
   dragState,
+  draggingId,
   selectedId,
+  newCardId,
   onDragStart,
-  onResizeStart,
   onSelect,
   onContentChange,
+  onAutoFocusConsumed,
   zoom,
+  ghostZIndex,
 }) => {
   const children = getChildren(allCards, card.id)
   const isNestTarget = dragState?.nestTargetId === card.id
@@ -58,11 +67,20 @@ export const Card: React.FC<CardProps> = React.memo(({
     }
   }, [card.content, isEditing])
 
-  // Auto-focus textarea when entering edit mode
+  // Auto-focus when this card was just created (newCardId matches our id).
+  // We enter edit mode immediately and clear the signal so it doesn't re-trigger.
+  useEffect(() => {
+    if (newCardId === card.id) {
+      setIsEditing(true)
+      onAutoFocusConsumed()
+    }
+  }, [newCardId, card.id, onAutoFocusConsumed])
+
+  // Focus the textarea whenever we enter edit mode
   useEffect(() => {
     if (isEditing && textareaRef.current) {
       textareaRef.current.focus()
-      // Place cursor at end
+      // Place cursor at end of existing content
       const len = textareaRef.current.value.length
       textareaRef.current.setSelectionRange(len, len)
     }
@@ -70,7 +88,7 @@ export const Card: React.FC<CardProps> = React.memo(({
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (isEditing) return // Don't start drag while editing
+      if (isEditing) return
       e.stopPropagation()
       onSelect(card.id)
       onDragStart(card.id, e)
@@ -78,24 +96,17 @@ export const Card: React.FC<CardProps> = React.memo(({
     [card.id, onDragStart, onSelect, isEditing]
   )
 
-  const handleResizeMouseDown = useCallback(
+  // Double-clicking the header text area enters edit mode.
+  // Uses onDoubleClick so a single click still just selects the card.
+  // stopPropagation prevents the canvas-level onDoubleClick from firing
+  // (which would create a new card).
+  const handleHeaderDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      e.preventDefault()
-      onResizeStart(card.id, e)
+      onSelect(card.id)
+      setIsEditing(true)
     },
-    [card.id, onResizeStart]
-  )
-
-  const handleTextClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (!isEditing) {
-        onSelect(card.id)
-        setIsEditing(true)
-      }
-    },
-    [card.id, onSelect, isEditing]
+    [card.id, onSelect]
   )
 
   const commitEdit = useCallback(() => {
@@ -116,7 +127,6 @@ export const Card: React.FC<CardProps> = React.memo(({
         e.preventDefault()
         commitEdit()
       } else if (e.key === 'Escape') {
-        // Discard changes
         setEditValue(card.content)
         setIsEditing(false)
       }
@@ -125,9 +135,10 @@ export const Card: React.FC<CardProps> = React.memo(({
   )
 
   const handleTextareaMouseDown = useCallback((e: React.MouseEvent) => {
-    // Prevent drag from starting when clicking inside the textarea
     e.stopPropagation()
   }, [])
+
+  const titleFontSize = Math.max(10, Math.min(14, 14 / Math.max(1, card.depth * 0.3 + 0.7)))
 
   return (
     <div
@@ -154,49 +165,36 @@ export const Card: React.FC<CardProps> = React.memo(({
         userSelect: 'none',
         transition: isDragging ? 'none' : 'box-shadow 0.15s ease',
         opacity: isDragging ? 0.85 : 1,
-        zIndex: isDragging ? 1000 : card.depth,
-        overflow: 'visible', // Children can temporarily exceed bounds
-        contain: 'layout style', // Performance: isolate layout recalc
+        // Fix 1: ghostZIndex overrides the normal depth-based z-index when this
+        // instance is the root-level ghost rendered outside all stacking contexts.
+        zIndex: ghostZIndex !== undefined ? ghostZIndex : isDragging ? 1000 : card.depth,
+        // overflow must remain visible so child cards that overflow their
+        // parent container are still rendered.
+        overflow: 'visible',
+        display: 'flex',
+        flexDirection: 'column',
       }}
       onMouseDown={handleMouseDown}
     >
-      {/* Header / Label area */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Header row -- ALWAYS visible. Contains the card's title/label.      */}
+      {/* The bottom border is the separator line, always rendered.           */}
+      {/* ------------------------------------------------------------------ */}
       <div
         style={{
+          flexShrink: 0,
           height: HEADER_HEIGHT,
+          minHeight: HEADER_HEIGHT,
           padding: '0 8px',
           display: 'flex',
           alignItems: 'center',
-          fontSize: Math.max(10, Math.min(14, 14 / Math.max(1, card.depth * 0.3 + 0.7))),
-          fontWeight: 600,
-          color: '#333',
-          borderBottom: children.length > 0 ? '1px solid rgba(0,0,0,0.1)' : 'none',
-          cursor: isEditing ? 'default' : 'grab',
-        }}
-        onMouseDown={handleMouseDown}
-      >
-        {children.length > 0 && (
-          <span style={{ color: '#999', fontWeight: 400, marginLeft: 'auto', fontSize: 11 }}>
-            ({children.length})
-          </span>
-        )}
-      </div>
-
-      {/* Content / text area */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: `${HEADER_HEIGHT}px 8px 8px`,
+          gap: 6,
+          borderBottom: '1px solid rgba(0,0,0,0.12)',
           cursor: isEditing ? 'text' : 'grab',
+          overflow: 'hidden',
         }}
-        onClick={handleTextClick}
+        onMouseDown={isEditing ? undefined : handleMouseDown}
+        onDoubleClick={handleHeaderDoubleClick}
       >
         {isEditing ? (
           <textarea
@@ -207,86 +205,111 @@ export const Card: React.FC<CardProps> = React.memo(({
             onKeyDown={handleTextareaKeyDown}
             onMouseDown={handleTextareaMouseDown}
             style={{
-              width: '100%',
-              height: '100%',
+              flex: 1,
+              height: HEADER_HEIGHT - 6,
               border: 'none',
               background: 'transparent',
               resize: 'none',
               outline: 'none',
-              fontSize: 13,
+              fontSize: titleFontSize,
               fontFamily: 'inherit',
+              fontWeight: 600,
               color: '#333',
               cursor: 'text',
               lineHeight: 1.4,
+              padding: 0,
+              // Single-line feel inside the header
+              overflowY: 'hidden',
             }}
           />
         ) : (
           <span
             style={{
-              fontSize: 13,
+              flex: 1,
+              fontSize: titleFontSize,
+              fontWeight: 600,
               color: card.content ? '#333' : '#aaa',
               fontStyle: card.content ? 'normal' : 'italic',
+              whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitLineClamp: 3,
-              WebkitBoxOrient: 'vertical',
-              wordBreak: 'break-word',
               pointerEvents: 'none',
+              textAlign: 'left',
             }}
           >
-            {card.content || 'Click to edit'}
+            {card.content || 'Untitled'}
+          </span>
+        )}
+
+        {/* Child count badge */}
+        {children.length > 0 && (
+          <span style={{
+            flexShrink: 0,
+            color: '#999',
+            fontWeight: 400,
+            fontSize: 11,
+            pointerEvents: 'none',
+          }}>
+            ({children.length})
           </span>
         )}
       </div>
 
-      {/* Content area -- children render here */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Content area -- children render here as absolutely-positioned cards */}
+      {/* ------------------------------------------------------------------ */}
       <div
         style={{
           position: 'relative',
-          width: '100%',
-          height: card.height - HEADER_HEIGHT,
-          marginTop: HEADER_HEIGHT,
+          flex: 1,
           overflow: 'visible',
         }}
       >
-        {children.map((child) => (
-          <Card
-            key={child.id}
-            card={child}
-            allCards={allCards}
-            dragState={dragState}
-            selectedId={selectedId}
-            onDragStart={onDragStart}
-            onResizeStart={onResizeStart}
-            onSelect={onSelect}
-            onContentChange={onContentChange}
-            zoom={zoom}
-          />
-        ))}
+        {children.map((child) => {
+          // Fix 1: suppress the nested instance of the card being dragged.
+          // It is rendered separately at root level as a ghost card to escape
+          // CSS stacking contexts. Rendering it here too would show a
+          // duplicate at the original position while dragging.
+          if (child.id === draggingId) return null
+          return (
+            <Card
+              key={child.id}
+              card={child}
+              allCards={allCards}
+              dragState={dragState}
+              draggingId={draggingId}
+              selectedId={selectedId}
+              newCardId={newCardId}
+              onDragStart={onDragStart}
+
+              onSelect={onSelect}
+              onContentChange={onContentChange}
+              onAutoFocusConsumed={onAutoFocusConsumed}
+              zoom={zoom}
+            />
+          )
+        })}
       </div>
 
-      {/* Resize handle (bottom-right corner) */}
-      <div
-        onMouseDown={handleResizeMouseDown}
-        style={{
-          position: 'absolute',
-          right: -1,
-          bottom: -1,
-          width: 14,
-          height: 14,
-          cursor: 'se-resize',
-          background: 'transparent',
-          borderRight: '2px solid #999',
-          borderBottom: '2px solid #999',
-          borderRadius: '0 0 4px 0',
-          opacity: isSelected ? 1 : 0,
-          transition: 'opacity 0.15s',
-          zIndex: 10,
-        }}
-      />
+      {/* Visual resize indicator (bottom-right corner). Purely visual --
+          resize detection happens in App.tsx via pendingDrag promotion. */}
+      {isSelected && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 2,
+            bottom: 2,
+            width: 12,
+            height: 12,
+            borderRight: '2px solid #999',
+            borderBottom: '2px solid #999',
+            borderRadius: '0 0 4px 0',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
 
-      {/* Nest target highlight overlay -- kept for M2, not activated at M1 */}
+      {/* Nest target highlight overlay */}
       {isNestTarget && (
         <div
           style={{

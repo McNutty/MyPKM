@@ -30,7 +30,9 @@ import {
   computeDepths,
   updateDescendantDepths,
   normalizeChildPositions,
+  computeStackedPosition,
   PADDING,
+  BOTTOM_PADDING,
   HEADER_HEIGHT,
   MIN_W,
   MIN_H,
@@ -44,6 +46,11 @@ import { db } from './ipc'
 
 /** M2: nesting, persistence, and breadcrumb are fully wired */
 const NESTING_ENABLED = true
+
+// Pixels the cursor must travel (Manhattan distance) from the mousedown point
+// before a card drag is committed. Keeps clicks and double-clicks from
+// activating the ghost system, while still feeling instant for real drags.
+const DRAG_THRESHOLD = 4
 
 // ============================================================================
 // INFINITE CANVAS COMPONENT
@@ -62,12 +69,25 @@ export default function App() {
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [resizeState, setResizeState] = useState<ResizeState | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [newCardId, setNewCardId] = useState<number | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const canvasRef = useRef<HTMLDivElement>(null)
+
+  // Pending drag: records the mousedown position before the cursor has moved
+  // far enough to commit to a real drag. Using a ref avoids re-renders on every
+  // mousedown. Only promoted to dragState once the threshold is exceeded in
+  // handleMouseMove. This allows clicks (select) and double-clicks (edit) to
+  // reach their handlers without the ghost system activating prematurely.
+  const pendingDragRef = useRef<{
+    cardId: number
+    startClientX: number
+    startClientY: number
+    cardRect: DOMRect | null
+  } | null>(null)
 
   // Keep a stable ref to cards for use inside event handlers that close over stale state
   const cardsRef = useRef(cards)
@@ -213,45 +233,25 @@ export default function App() {
   const handleCardDragStart = useCallback(
     (cardId: number, e: React.MouseEvent) => {
       e.stopPropagation()
-      const card = cardsRef.current.get(cardId)
-      if (!card) return
-
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (!rect) return
-
-      const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
-      const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
-
-      const absPos = getAbsolutePosition(cardsRef.current, cardId)
-
-      setDragState({
+      // Do NOT set dragState yet. Store the mousedown position as a pending
+      // drag. handleMouseMove will promote this to a real dragState once the
+      // cursor moves more than DRAG_THRESHOLD pixels. This keeps the card in
+      // the normal DOM tree for the duration of a click or double-click, so
+      // onDoubleClick and the resize handle work correctly.
+      // Store the card's screen rect so we can detect resize zone at promotion time
+      const cardEl = document.querySelector(`[data-card-id="${cardId}"]`) as HTMLElement | null
+      const cardRect = cardEl?.getBoundingClientRect() ?? null
+      pendingDragRef.current = {
         cardId,
-        offsetX: canvasX - absPos.x,
-        offsetY: canvasY - absPos.y,
-        nestTargetId: null,
-      })
-    },
-    [viewport]
-  )
-
-  // ---------------------------------------------------------------------------
-  // RESIZE CARD
-  // ---------------------------------------------------------------------------
-  const handleCardResizeStart = useCallback(
-    (cardId: number, e: React.MouseEvent) => {
-      const card = cardsRef.current.get(cardId)
-      if (!card) return
-      setResizeState({
-        cardId,
-        handle: 'se',
-        startWidth: card.width,
-        startHeight: card.height,
-        startMouseX: e.clientX,
-        startMouseY: e.clientY,
-      })
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        cardRect,
+      }
     },
     []
   )
+
+  // (Resize is now detected in handleMouseMove during pendingDrag promotion)
 
   // ---------------------------------------------------------------------------
   // MOUSE MOVE (handles drag, resize, and pan)
@@ -260,6 +260,63 @@ export default function App() {
     (e: React.MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
+
+      // --- PENDING DRAG THRESHOLD CHECK ---
+      // If a mousedown was recorded but we haven't started a real drag yet,
+      // check whether the cursor has moved far enough to commit. We only
+      // promote once there is no active drag or resize already in progress
+      // (those are mutually exclusive with a pending drag in practice, but
+      // the guard keeps the logic airtight).
+      const pending = pendingDragRef.current
+      if (pending && !dragState && !resizeState) {
+        const dist =
+          Math.abs(e.clientX - pending.startClientX) +
+          Math.abs(e.clientY - pending.startClientY)
+        if (dist > DRAG_THRESHOLD) {
+          // Threshold crossed -- decide whether this is a RESIZE or a DRAG
+          // based on where the original mousedown landed relative to the card.
+          const card = cardsRef.current.get(pending.cardId)
+          if (card) {
+            const RESIZE_EDGE = 16
+            let isResize = false
+            if (pending.cardRect) {
+              const localX = pending.startClientX - pending.cardRect.left
+              const localY = pending.startClientY - pending.cardRect.top
+              const nearRight = localX >= pending.cardRect.width - RESIZE_EDGE
+              const nearBottom = localY >= pending.cardRect.height - RESIZE_EDGE
+              isResize = nearRight || nearBottom
+            }
+
+            if (isResize) {
+              // Promote to resize
+              setResizeState({
+                cardId: pending.cardId,
+                handle: 'se',
+                startWidth: card.width,
+                startHeight: card.height,
+                startMouseX: pending.startClientX,
+                startMouseY: pending.startClientY,
+              })
+            } else {
+              // Promote to drag
+              const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+              const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+              const absPos = getAbsolutePosition(cardsRef.current, pending.cardId)
+              setDragState({
+                cardId: pending.cardId,
+                offsetX: canvasX - absPos.x,
+                offsetY: canvasY - absPos.y,
+                nestTargetId: null,
+                absX: absPos.x,
+                absY: absPos.y,
+              })
+            }
+          }
+          pendingDragRef.current = null
+        }
+        // Below threshold: do nothing, wait for more movement or mouseup.
+        return
+      }
 
       // --- PANNING ---
       if (isPanning) {
@@ -277,8 +334,29 @@ export default function App() {
       if (resizeState) {
         const dx = (e.clientX - resizeState.startMouseX) / viewport.zoom
         const dy = (e.clientY - resizeState.startMouseY) / viewport.zoom
-        const newW = Math.max(MIN_W, resizeState.startWidth + dx)
-        const newH = Math.max(MIN_H, resizeState.startHeight + dy)
+        let newW = Math.max(MIN_W, resizeState.startWidth + dx)
+        let newH = Math.max(MIN_H, resizeState.startHeight + dy)
+
+        // Fix 2: prevent shrinking a container below the bounding box of its
+        // children. Without this, manually dragging the resize handle can push
+        // children outside the visible area of their parent.
+        const currentCard = cardsRef.current.get(resizeState.cardId)
+        if (currentCard) {
+          const kids = getChildren(cardsRef.current, resizeState.cardId)
+          if (kids.length > 0) {
+            let maxRight = 0
+            let maxBottom = 0
+            for (const kid of kids) {
+              maxRight = Math.max(maxRight, kid.x + kid.width)
+              maxBottom = Math.max(maxBottom, kid.y + kid.height)
+            }
+            // Children occupy local coords; add padding/header to get container minimums.
+            const minWFromChildren = maxRight + PADDING
+            const minHFromChildren = HEADER_HEIGHT + maxBottom + BOTTOM_PADDING
+            newW = Math.max(newW, minWFromChildren)
+            newH = Math.max(newH, minHFromChildren)
+          }
+        }
 
         setCards((prev) => {
           const updated = new Map(prev)
@@ -305,10 +383,15 @@ export default function App() {
       const newAbsX = canvasX - dragState.offsetX
       const newAbsY = canvasY - dragState.offsetY
 
-      // --- NEST TARGET DETECTION (disabled at M1) ---
+      // --- NEST TARGET DETECTION ---
+      // A card becomes a nest target only when the cursor is over its TITLE BAR
+      // (the top HEADER_HEIGHT pixels). This prevents the grandparent's content
+      // area from capturing drops intended for a child container.
       if (NESTING_ENABLED) {
-        const centerX = newAbsX + card.width / 2
-        const centerY = newAbsY + card.height / 2
+        // Use the raw cursor position in canvas space -- not the dragged card's
+        // center -- so the user points at a specific header to trigger nesting.
+        const cursorCanvasX = canvasX
+        const cursorCanvasY = canvasY
 
         let bestTarget: number | null = null
         let bestArea = Infinity
@@ -320,11 +403,13 @@ export default function App() {
 
           const absPos = getAbsolutePosition(cardsRef.current, id)
           const area = candidate.width * candidate.height
+
+          // Hit zone is the header strip only: full width, top HEADER_HEIGHT px.
           if (
-            centerX >= absPos.x &&
-            centerX <= absPos.x + candidate.width &&
-            centerY >= absPos.y + HEADER_HEIGHT &&
-            centerY <= absPos.y + candidate.height &&
+            cursorCanvasX >= absPos.x &&
+            cursorCanvasX <= absPos.x + candidate.width &&
+            cursorCanvasY >= absPos.y &&
+            cursorCanvasY <= absPos.y + HEADER_HEIGHT &&
             area < bestArea
           ) {
             bestTarget = id
@@ -332,12 +417,22 @@ export default function App() {
           }
         }
 
+        // Fix 1: also update absX/absY so the root-level ghost follows the cursor.
         setDragState((prev) =>
-          prev ? { ...prev, nestTargetId: bestTarget } : null
+          prev ? { ...prev, nestTargetId: bestTarget, absX: newAbsX, absY: newAbsY } : null
+        )
+      } else {
+        // NESTING_ENABLED is false -- still need to keep absX/absY current for
+        // the ghost renderer.
+        setDragState((prev) =>
+          prev ? { ...prev, absX: newAbsX, absY: newAbsY } : null
         )
       }
 
-      // Update card position (local coords relative to current parent)
+      // Update card position (local coords relative to current parent).
+      // No autoResizeParent here -- parent resize fires once on mouse-up, not
+      // on every frame. Firing it during drag caused the parent to chase the
+      // card and made it visually impossible to drag a child outside its parent.
       setCards((prev) => {
         const updated = new Map(prev)
         const c = updated.get(dragState.cardId)
@@ -345,10 +440,6 @@ export default function App() {
 
         const localPos = canvasToLocal(updated, newAbsX, newAbsY, c.parentId)
         updated.set(dragState.cardId, { ...c, x: localPos.x, y: localPos.y })
-
-        if (c.parentId !== null) {
-          return autoResizeParent(updated, c.parentId)
-        }
         return updated
       })
     },
@@ -359,6 +450,12 @@ export default function App() {
   // MOUSE UP (end drag, resize, or pan -- persist to DB)
   // ---------------------------------------------------------------------------
   const handleMouseUp = useCallback(async () => {
+    // If mouseup fires while pendingDrag was never promoted, it was just a
+    // click (or very short tap). Clear the pending state -- the card stays
+    // in the DOM, selection already happened in Card's handleMouseDown, and
+    // the resize handle is now visible for a selected card.
+    pendingDragRef.current = null
+
     if (isPanning) {
       setIsPanning(false)
       return
@@ -437,15 +534,16 @@ export default function App() {
       const target = nextCards.get(nestTargetId)
       if (!c || !target) return
 
-      const absPos = getAbsolutePosition(nextCards, cardId)
-      const localPos = canvasToLocal(nextCards, absPos.x, absPos.y, nestTargetId)
+      // Place the card below existing children -- no overlap.
+      const stackPos = computeStackedPosition(nextCards, nestTargetId, c.width)
 
       const newDepth = target.depth + 1
       nextCards.set(cardId, {
         ...c,
         parentId: nestTargetId,
-        x: Math.max(PADDING, localPos.x),
-        y: Math.max(PADDING, localPos.y),
+        x: stackPos.x,
+        y: stackPos.y,
+        width: stackPos.width,
         depth: newDepth,
         color: getDepthColor(newDepth),
       })
@@ -573,8 +671,41 @@ export default function App() {
     }
 
     // --- LAYOUT-ONLY DRAG: same parent, just moved within it ---
+    // Fix 3: if the card has a parent, run autoResizeParent now. During the
+    // drag we intentionally skip it (it would cause the parent to chase the
+    // card), so this is the one moment we reconcile the parent's size with
+    // wherever the card landed -- including cases where it was moved beyond
+    // the previous parent boundary.
     const finalCard = cardsRef.current.get(cardId)
     if (finalCard) {
+      if (finalCard.parentId !== null) {
+        const afterResize = autoResizeParent(cardsRef.current, finalCard.parentId)
+        const parentAfter = afterResize.get(finalCard.parentId)
+        const parentBefore = cardsRef.current.get(finalCard.parentId)
+
+        // Only call setCards if something actually changed.
+        if (
+          parentAfter &&
+          parentBefore &&
+          (parentAfter.width !== parentBefore.width || parentAfter.height !== parentBefore.height)
+        ) {
+          setCards(afterResize)
+          // Persist the parent's new size alongside the card's new position.
+          try {
+            await Promise.all([
+              db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height),
+              db.updateNodeLayout(parentAfter.id, 1, parentAfter.x, parentAfter.y, parentAfter.width, parentAfter.height),
+            ])
+            setError(null)
+          } catch (err) {
+            console.error('[App] Failed to persist layout-only drag with parent resize:', err)
+            setError('Failed to save position.')
+          }
+          return
+        }
+      }
+
+      // No parent resize needed (or card is top-level) -- just persist the card.
       try {
         await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height)
         setError(null)
@@ -620,6 +751,7 @@ export default function App() {
           return updated
         })
         setSelectedId(id)
+        setNewCardId(id)  // Signal Card to auto-focus the textarea
         setError(null)
       } catch (err) {
         console.error('[App] Failed to create card:', err)
@@ -720,6 +852,22 @@ export default function App() {
   for (const card of cards.values()) {
     if (card.parentId === null) topLevelCards.push(card)
   }
+
+  // Fix 1: the ghost card for the currently-dragged card.
+  // We render it once at the root level of the canvas transform div so it
+  // escapes all nested CSS stacking contexts. The card is omitted from its
+  // normal nested position in the render below (see the `isDraggingThisCard`
+  // guard inside the Card component).
+  const draggingId = dragState?.cardId ?? null
+  const ghostCard: CardData | null = (() => {
+    if (!dragState) return null
+    const c = cards.get(dragState.cardId)
+    if (!c) return null
+    // Return a modified copy positioned at absolute canvas coordinates.
+    // parentId is set to null so the ghost div is placed directly on the
+    // canvas transform layer (left: absX, top: absY).
+    return { ...c, x: dragState.absX, y: dragState.absY, parentId: null }
+  })()
 
   // Task 4: Breadcrumb -- walk the ancestor chain of the selected card.
   // Result is ordered root-first: ["Canvas", "Bicycle", "Wheels", "Front Wheel"]
@@ -873,20 +1021,50 @@ export default function App() {
             transform: `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`,
           }}
         >
-          {topLevelCards.map((card) => (
+          {topLevelCards.map((card) => {
+            // Fix 1: skip the dragged card in its normal tree position.
+            // It will be rendered as a root-level ghost below, escaping all
+            // nested stacking contexts.
+            if (card.id === draggingId) return null
+            return (
+              <Card
+                key={card.id}
+                card={card}
+                allCards={cards}
+                dragState={dragState}
+                draggingId={draggingId}
+                selectedId={selectedId}
+                newCardId={newCardId}
+                onDragStart={handleCardDragStart}
+
+                onSelect={setSelectedId}
+                onContentChange={handleContentChange}
+                onAutoFocusConsumed={() => setNewCardId(null)}
+                zoom={viewport.zoom}
+              />
+            )
+          })}
+
+          {/* Fix 1: root-level ghost for the card being dragged.
+              Rendered outside its parent's DOM subtree so CSS z-index works
+              across all stacking contexts. zIndex 10000 puts it above everything. */}
+          {ghostCard && (
             <Card
-              key={card.id}
-              card={card}
+              key={`ghost-${ghostCard.id}`}
+              card={ghostCard}
               allCards={cards}
               dragState={dragState}
+              draggingId={draggingId}
               selectedId={selectedId}
+              newCardId={newCardId}
               onDragStart={handleCardDragStart}
-              onResizeStart={handleCardResizeStart}
               onSelect={setSelectedId}
               onContentChange={handleContentChange}
+              onAutoFocusConsumed={() => setNewCardId(null)}
               zoom={viewport.zoom}
+              ghostZIndex={10000}
             />
-          ))}
+          )}
         </div>
 
         {/* Card count indicator */}

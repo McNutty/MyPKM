@@ -23,9 +23,11 @@ import type { CardData } from './types'
 import type { NodeWithLayout } from '../ipc'
 
 export const PADDING = 16
+export const BOTTOM_PADDING = 20  // Extra bottom buffer so children never clip the parent border
 export const HEADER_HEIGHT = 28
 export const MIN_W = 100
 export const MIN_H = 50
+export const STACK_GAP = 10  // Vertical gap between stacked children
 
 const DEPTH_COLORS = [
   '#e3f2fd', // Level 0 - light blue
@@ -228,7 +230,7 @@ export function autoResizeParent(
     }
 
     const neededW = Math.max(MIN_W, maxRight + PADDING)
-    const neededH = Math.max(MIN_H, maxBottom + PADDING + HEADER_HEIGHT)
+    const neededH = Math.max(MIN_H, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
 
     const newW = Math.max(MIN_W, neededW)
     const newH = Math.max(MIN_H, neededH)
@@ -300,6 +302,43 @@ export function getAbsolutePosition(
   }
 
   return { x, y }
+}
+
+/**
+ * Compute the position for a card being nested into a parent so that it
+ * stacks below all existing children without overlap.
+ *
+ * Children are stacked vertically in the parent's content area:
+ *   - First child: (PADDING, PADDING)
+ *   - Each subsequent child: (PADDING, prevBottom + STACK_GAP)
+ *
+ * The incoming card's width is clamped to fit within the parent
+ * (parent.width - 2 * PADDING) when that is larger than MIN_W.
+ *
+ * Returns { x, y, width } in the parent's local coordinate space.
+ */
+export function computeStackedPosition(
+  cards: Map<number, CardData>,
+  parentId: number,
+  cardWidth: number,
+): { x: number; y: number; width: number } {
+  const parent = cards.get(parentId)
+  const children = getChildren(cards, parentId)
+
+  const availableWidth = parent ? Math.max(MIN_W, parent.width - 2 * PADDING) : cardWidth
+  const w = Math.min(cardWidth, availableWidth)
+
+  if (children.length === 0) {
+    return { x: PADDING, y: PADDING, width: w }
+  }
+
+  // Find the bottom edge of the lowest existing child.
+  let maxBottom = 0
+  for (const child of children) {
+    maxBottom = Math.max(maxBottom, child.y + child.height)
+  }
+
+  return { x: PADDING, y: maxBottom + STACK_GAP, width: w }
 }
 
 /**

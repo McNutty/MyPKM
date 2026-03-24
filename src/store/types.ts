@@ -39,11 +39,18 @@ export interface CanvasViewport {
 export interface DragState {
   /** The card being dragged */
   cardId: number
-  /** Offset from the card's top-left to the mouse position (in card-local coords) */
+  /** Offset from the card's top-left to the mouse position (in canvas-space coords) */
   offsetX: number
   offsetY: number
   /** Whether we are currently hovering over a potential nest target */
   nestTargetId: number | null
+  /**
+   * Current absolute canvas-space position of the dragged card's top-left corner.
+   * Updated every mousemove. Used by the root-level ghost renderer (Fix 1) to
+   * position the card outside its parent's DOM subtree, escaping stacking contexts.
+   */
+  absX: number
+  absY: number
 }
 
 export interface ResizeState {
