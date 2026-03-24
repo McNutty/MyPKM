@@ -433,17 +433,14 @@ export default function App() {
       // --- NEST TARGET DETECTION ---
       // A card becomes a nest target when the cursor is anywhere over its body.
       // Among all overlapping candidates, the smallest card wins (most specific
-      // target). The dragged card itself and ALL of its ancestors are excluded:
-      //   - The dragged card: can't nest into itself.
-      //   - Direct parent: repositioning within the same parent must never
-      //     re-trigger the parent as a nest target.
-      //   - Grandparent and above: with full-card hit zones, the grandparent's
-      //     body always contains the parent (and therefore the cursor), so
-      //     without this exclusion it would permanently light up as a target
-      //     whenever the user moves a card inside its parent.
-      // Additionally, if the cursor is still within the dragged card's current
-      // parent's bounds, there is no nest target at all -- the user is just
-      // repositioning within the parent, not trying to nest elsewhere.
+      // target). Only two cards are excluded from consideration:
+      //   - The dragged card itself (can't nest into itself).
+      //   - Descendants of the dragged card (can't nest a parent into its child).
+      // Ancestors (parent, grandparent, etc.) are valid targets -- the user can
+      // explicitly drag a card out of a deep nest and drop it onto a grandparent.
+      // The key guard against accidental ancestor highlighting: if the cursor is
+      // still inside the current parent's bounds, nest detection is suppressed
+      // entirely (the user is just repositioning within the parent).
       if (NESTING_ENABLED) {
         // Use the raw cursor position in canvas space -- not the dragged card's
         // center -- so the user has precise control over which card to target.
@@ -475,10 +472,6 @@ export default function App() {
             if (id === dragState.cardId) continue
             // Skip descendants of the dragged card (can't nest a parent into its child).
             if (isAncestor(cardsRef.current, id, dragState.cardId)) continue
-            // Skip ALL ancestors of the dragged card (direct parent, grandparent, etc.).
-            // isAncestor(cards, dragged, candidate) returns true when candidate is
-            // an ancestor of the dragged card.
-            if (isAncestor(cardsRef.current, dragState.cardId, id)) continue
 
             const absPos = getAbsolutePosition(cardsRef.current, id)
             const area = candidate.width * candidate.height
