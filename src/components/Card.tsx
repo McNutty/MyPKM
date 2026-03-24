@@ -22,6 +22,8 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import type { CardData, DragState } from '../store/types'
 import { getChildren, HEADER_HEIGHT } from '../store/canvas-store'
 
+const RESIZE_EDGE = 16
+
 interface CardProps {
   card: CardData
   allCards: Map<number, CardData>
@@ -55,9 +57,21 @@ export const Card: React.FC<CardProps> = React.memo(({
   const isNestTarget = dragState?.nestTargetId === card.id
   const isSelected = selectedId === card.id
   const isDragging = dragState?.cardId === card.id
+  // Issue 2: show a blue container outline when a child of this card is being
+  // dragged inside it. Consistent with the nest-target highlight but distinct
+  // (dashed vs solid) so it reads as "this is the active container" rather
+  // than "this is a drop target".
+  const isActiveContainer =
+    !isNestTarget &&
+    dragState !== null &&
+    (() => {
+      const dragged = allCards.get(dragState.cardId)
+      return dragged?.parentId === card.id
+    })()
 
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(card.content)
+  const [isInResizeZone, setIsInResizeZone] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Keep editValue in sync when content changes externally (e.g. on load)
@@ -138,6 +152,28 @@ export const Card: React.FC<CardProps> = React.memo(({
     e.stopPropagation()
   }, [])
 
+  // Purely visual -- no mousedown handling involved. Checks whether the cursor
+  // is within the resize edge zone (bottom or right within RESIZE_EDGE px) and
+  // toggles the se-resize cursor. Mirrors the same RESIZE_EDGE constant used
+  // in App.tsx's pendingDrag promotion.
+  const handleRootMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (isEditing) {
+      setIsInResizeZone(false)
+      return
+    }
+    const el = e.currentTarget
+    const rect = el.getBoundingClientRect()
+    const localX = e.clientX - rect.left
+    const localY = e.clientY - rect.top
+    const nearRight = localX >= rect.width - RESIZE_EDGE
+    const nearBottom = localY >= rect.height - RESIZE_EDGE
+    setIsInResizeZone(nearRight || nearBottom)
+  }, [isEditing])
+
+  const handleRootMouseLeave = useCallback(() => {
+    setIsInResizeZone(false)
+  }, [])
+
   const titleFontSize = Math.max(10, Math.min(14, 14 / Math.max(1, card.depth * 0.3 + 0.7)))
 
   return (
@@ -152,6 +188,8 @@ export const Card: React.FC<CardProps> = React.memo(({
         backgroundColor: card.color,
         border: isNestTarget
           ? '3px solid #2196f3'
+          : isActiveContainer
+          ? '2px dashed #2196f3'
           : isSelected
           ? '2px solid #1976d2'
           : '1px solid #bdbdbd',
@@ -161,7 +199,7 @@ export const Card: React.FC<CardProps> = React.memo(({
           : isSelected
           ? '0 2px 8px rgba(25,118,210,0.3)'
           : '0 1px 3px rgba(0,0,0,0.1)',
-        cursor: isEditing ? 'default' : 'grab',
+        cursor: isEditing ? 'default' : isInResizeZone ? 'se-resize' : 'grab',
         userSelect: 'none',
         transition: isDragging ? 'none' : 'box-shadow 0.15s ease',
         opacity: isDragging ? 0.85 : 1,
@@ -175,6 +213,8 @@ export const Card: React.FC<CardProps> = React.memo(({
         flexDirection: 'column',
       }}
       onMouseDown={handleMouseDown}
+      onMouseMove={handleRootMouseMove}
+      onMouseLeave={handleRootMouseLeave}
     >
       {/* ------------------------------------------------------------------ */}
       {/* Header row -- ALWAYS visible. Contains the card's title/label.      */}
@@ -317,6 +357,20 @@ export const Card: React.FC<CardProps> = React.memo(({
             inset: 0,
             borderRadius: 6,
             backgroundColor: 'rgba(33, 150, 243, 0.1)',
+            pointerEvents: 'none',
+            zIndex: 999,
+          }}
+        />
+      )}
+
+      {/* Issue 2: active container overlay -- shows while a direct child is being dragged */}
+      {isActiveContainer && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: 6,
+            backgroundColor: 'rgba(33, 150, 243, 0.06)',
             pointerEvents: 'none',
             zIndex: 999,
           }}

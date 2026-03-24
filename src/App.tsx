@@ -637,44 +637,69 @@ export default function App() {
     }
 
     // --- UNNEST: card dragged outside its current parent ---
+    // Walk the ancestor chain from the immediate parent upward. For each
+    // ancestor, check whether the dragged card's center is outside that
+    // ancestor's bounds. Keep walking until we find an ancestor that still
+    // contains the card -- that ancestor becomes the new parent. If the card
+    // is outside every ancestor, it lands at the canvas root (parentId null).
+    // This handles cards nested more than one level deep: a card at depth 3
+    // can escape all the way to the canvas in a single drag.
     if (!nestTargetId && card.parentId !== null) {
       const absPos = getAbsolutePosition(cardsRef.current, cardId)
       const centerX = absPos.x + card.width / 2
       const centerY = absPos.y + card.height / 2
 
-      const parentAbs = getAbsolutePosition(cardsRef.current, card.parentId)
-      const parent = cardsRef.current.get(card.parentId)
+      // Check whether the card center is outside its immediate parent first.
+      // If it is still inside, nothing to do.
+      const immediateParent = cardsRef.current.get(card.parentId)
+      if (immediateParent) {
+        const immediateParentAbs = getAbsolutePosition(cardsRef.current, card.parentId)
+        const stillInsideImmediate =
+          centerX >= immediateParentAbs.x &&
+          centerX <= immediateParentAbs.x + immediateParent.width &&
+          centerY >= immediateParentAbs.y &&
+          centerY <= immediateParentAbs.y + immediateParent.height
 
-      if (parent) {
-        const outside =
-          centerX < parentAbs.x ||
-          centerX > parentAbs.x + parent.width ||
-          centerY < parentAbs.y ||
-          centerY > parentAbs.y + parent.height
+        if (!stillInsideImmediate) {
+          // The card left its immediate parent. Walk up the ancestor chain to
+          // find the deepest ancestor that still contains the card's center.
+          let newParentId: number | null = null // default: canvas root
+          let ancestorId: number | null = immediateParent.parentId
 
-        if (outside) {
+          while (ancestorId !== null) {
+            const ancestor = cardsRef.current.get(ancestorId)
+            if (!ancestor) break
+            const ancestorAbs = getAbsolutePosition(cardsRef.current, ancestorId)
+            const insideAncestor =
+              centerX >= ancestorAbs.x &&
+              centerX <= ancestorAbs.x + ancestor.width &&
+              centerY >= ancestorAbs.y &&
+              centerY <= ancestorAbs.y + ancestor.height
+            if (insideAncestor) {
+              newParentId = ancestorId
+              break
+            }
+            ancestorId = ancestor.parentId
+          }
+
           const stateBefore = new Map(cardsRef.current)
 
           let nextCards = new Map(cardsRef.current)
           const c = nextCards.get(cardId)
           if (!c) return
 
-          // The card exits one level up. Its new parent is the current parent's parent.
-          const oldParent = nextCards.get(c.parentId!)
-          const grandparentId = oldParent?.parentId ?? null
-
-          // Convert absolute position to the grandparent's local space
-          // (or canvas root if grandparentId is null).
+          // Convert absolute position to the new parent's local space
+          // (or canvas root if newParentId is null).
           const abs = getAbsolutePosition(nextCards, cardId)
-          const localPos = canvasToLocal(nextCards, abs.x, abs.y, grandparentId)
+          const localPos = canvasToLocal(nextCards, abs.x, abs.y, newParentId)
 
-          const newDepth = grandparentId !== null
-            ? (nextCards.get(grandparentId)?.depth ?? 0) + 1
+          const newDepth = newParentId !== null
+            ? (nextCards.get(newParentId)?.depth ?? 0) + 1
             : 0
 
           nextCards.set(cardId, {
             ...c,
-            parentId: grandparentId,
+            parentId: newParentId,
             x: localPos.x,
             y: localPos.y,
             depth: newDepth,
@@ -684,18 +709,18 @@ export default function App() {
           // Propagate depth change to all descendants.
           nextCards = updateDescendantDepths(nextCards, cardId, newDepth)
 
-          // Resize the old parent (may now be smaller) and the grandparent.
+          // Resize the old parent (may now be smaller) and the new parent.
           if (c.parentId !== null) nextCards = autoResizeParent(nextCards, c.parentId)
-          if (grandparentId !== null) nextCards = autoResizeParent(nextCards, grandparentId)
+          if (newParentId !== null) nextCards = autoResizeParent(nextCards, newParentId)
 
           setCards(nextCards)
 
-          // Persist: updateNodeParent with newParentId = grandparentId (possibly null).
+          // Persist: updateNodeParent with newParentId (possibly null = canvas root).
           const finalCard = nextCards.get(cardId)!
           try {
             await db.updateNodeParent(
               cardId,
-              grandparentId,
+              newParentId,
               1,
               finalCard.x,
               finalCard.y,
@@ -714,41 +739,62 @@ export default function App() {
     }
 
     // --- LAYOUT-ONLY DRAG: same parent, just moved within it ---
-    // Fix 3: if the card has a parent, run autoResizeParent now. During the
-    // drag we intentionally skip it (it would cause the parent to chase the
-    // card), so this is the one moment we reconcile the parent's size with
-    // wherever the card landed -- including cases where it was moved beyond
-    // the previous parent boundary.
+    // Fix 3: if the card has a parent, run normalizeChildPositions then
+    // autoResizeParent now. During the drag we intentionally skip both (they
+    // would cause the parent to chase the card), so this is the one moment we
+    // reconcile positions and parent size. normalizeChildPositions first
+    // shifts any children that ended up with negative coords back to the
+    // padding boundary; then autoResizeParent can see the correct bounding box
+    // and grow rightward/downward to contain them.
     const finalCard = cardsRef.current.get(cardId)
     if (finalCard) {
       if (finalCard.parentId !== null) {
-        const afterResize = autoResizeParent(cardsRef.current, finalCard.parentId)
+        // normalizeChildPositions may shift children; feed its result into
+        // autoResizeParent so the two operations see a consistent state.
+        const afterNorm = normalizeChildPositions(cardsRef.current, finalCard.parentId)
+        const afterResize = autoResizeParent(afterNorm, finalCard.parentId)
         const parentAfter = afterResize.get(finalCard.parentId)
         const parentBefore = cardsRef.current.get(finalCard.parentId)
 
-        // Only call setCards if something actually changed.
-        if (
+        // Determine which cards actually changed so we only write what changed.
+        // normalizeChildPositions may have shifted children (left/up overflow fix),
+        // and autoResizeParent may have grown the parent -- either or both may apply.
+        const normChanged = afterNorm !== cardsRef.current
+        const resizeChanged =
           parentAfter &&
           parentBefore &&
           (parentAfter.width !== parentBefore.width || parentAfter.height !== parentBefore.height)
-        ) {
+
+        if (normChanged || resizeChanged) {
           setCards(afterResize)
-          // Persist the parent's new size alongside the card's new position.
+
+          // Persist all affected cards. Collect cards that differ from the
+          // pre-drag snapshot so we don't over-write cards that didn't move.
+          const writes: Promise<void>[] = []
+          for (const [id, card] of afterResize) {
+            const before = cardsRef.current.get(id)
+            if (
+              !before ||
+              card.x !== before.x ||
+              card.y !== before.y ||
+              card.width !== before.width ||
+              card.height !== before.height
+            ) {
+              writes.push(db.updateNodeLayout(id, 1, card.x, card.y, card.width, card.height))
+            }
+          }
           try {
-            await Promise.all([
-              db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height),
-              db.updateNodeLayout(parentAfter.id, 1, parentAfter.x, parentAfter.y, parentAfter.width, parentAfter.height),
-            ])
+            await Promise.all(writes)
             setError(null)
           } catch (err) {
-            console.error('[App] Failed to persist layout-only drag with parent resize:', err)
+            console.error('[App] Failed to persist layout-only drag with normalize/resize:', err)
             setError('Failed to save position.')
           }
           return
         }
       }
 
-      // No parent resize needed (or card is top-level) -- just persist the card.
+      // No parent changes needed (or card is top-level) -- just persist the card.
       try {
         await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height)
         setError(null)
