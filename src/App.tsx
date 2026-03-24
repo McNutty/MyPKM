@@ -431,12 +431,14 @@ export default function App() {
       const newAbsY = canvasY - dragState.offsetY
 
       // --- NEST TARGET DETECTION ---
-      // A card becomes a nest target only when the cursor is over its TITLE BAR
-      // (the top HEADER_HEIGHT pixels). This prevents the grandparent's content
-      // area from capturing drops intended for a child container.
+      // A card becomes a nest target when the cursor is anywhere over its body.
+      // Among all overlapping candidates, the smallest card wins (most specific
+      // target). The dragged card itself, its ancestors, and its current parent
+      // are excluded -- the current parent exclusion means repositioning within
+      // a parent never accidentally re-nests the card back into that parent.
       if (NESTING_ENABLED) {
         // Use the raw cursor position in canvas space -- not the dragged card's
-        // center -- so the user points at a specific header to trigger nesting.
+        // center -- so the user has precise control over which card to target.
         const cursorCanvasX = canvasX
         const cursorCanvasY = canvasY
 
@@ -451,12 +453,12 @@ export default function App() {
           const absPos = getAbsolutePosition(cardsRef.current, id)
           const area = candidate.width * candidate.height
 
-          // Hit zone is the header strip only: full width, top HEADER_HEIGHT px.
+          // Hit zone is the full card bounds -- dropping anywhere on a card nests into it.
           if (
             cursorCanvasX >= absPos.x &&
             cursorCanvasX <= absPos.x + candidate.width &&
             cursorCanvasY >= absPos.y &&
-            cursorCanvasY <= absPos.y + HEADER_HEIGHT &&
+            cursorCanvasY <= absPos.y + candidate.height &&
             area < bestArea
           ) {
             bestTarget = id
@@ -668,9 +670,9 @@ export default function App() {
     // --- UNNEST: card dragged outside its current parent ---
     // If the card's center is outside its immediate parent, unnest it to canvas
     // root unconditionally. Re-nesting into an ancestor only happens via the
-    // explicit nest-target path above (title-bar hover). This keeps the rule
-    // consistent: you must hover a title bar to nest; leaving a parent always
-    // means going to the canvas root.
+    // explicit nest-target path above (cursor over another card). This keeps
+    // the rule consistent: dragging over a card nests; leaving a parent with
+    // no target under the cursor always means going to the canvas root.
     if (!nestTargetId && card.parentId !== null) {
       const absPos = getAbsolutePosition(cardsRef.current, cardId)
       const centerX = absPos.x + card.width / 2
@@ -935,9 +937,10 @@ export default function App() {
         resetW = Math.max(MIN_W, maxRight + PADDING)
         resetH = Math.max(MIN_H, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
       } else {
-        // Leaf card: snap back to the baseline minimum dimensions.
-        resetW = MIN_W
-        resetH = MIN_H
+        // Leaf card: snap back to the same dimensions used when a new card is
+        // created (handleDoubleClick). Must stay in sync with that path.
+        resetW = 150
+        resetH = 60
       }
 
       // Optimistic update -- clear the floor (minWidth/minHeight = null) so
