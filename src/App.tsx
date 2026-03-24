@@ -433,36 +433,67 @@ export default function App() {
       // --- NEST TARGET DETECTION ---
       // A card becomes a nest target when the cursor is anywhere over its body.
       // Among all overlapping candidates, the smallest card wins (most specific
-      // target). The dragged card itself, its ancestors, and its current parent
-      // are excluded -- the current parent exclusion means repositioning within
-      // a parent never accidentally re-nests the card back into that parent.
+      // target). The dragged card itself and ALL of its ancestors are excluded:
+      //   - The dragged card: can't nest into itself.
+      //   - Direct parent: repositioning within the same parent must never
+      //     re-trigger the parent as a nest target.
+      //   - Grandparent and above: with full-card hit zones, the grandparent's
+      //     body always contains the parent (and therefore the cursor), so
+      //     without this exclusion it would permanently light up as a target
+      //     whenever the user moves a card inside its parent.
+      // Additionally, if the cursor is still within the dragged card's current
+      // parent's bounds, there is no nest target at all -- the user is just
+      // repositioning within the parent, not trying to nest elsewhere.
       if (NESTING_ENABLED) {
         // Use the raw cursor position in canvas space -- not the dragged card's
         // center -- so the user has precise control over which card to target.
         const cursorCanvasX = canvasX
         const cursorCanvasY = canvasY
 
+        // If the cursor is still inside the current parent, suppress all nest
+        // targets. This is the key fix for the grandparent highlight bug: when
+        // repositioning within a parent the grandparent's body contains the
+        // cursor, but the user is not trying to nest into the grandparent.
+        let cursorInsideCurrentParent = false
+        if (card.parentId !== null) {
+          const parentAbs = getAbsolutePosition(cardsRef.current, card.parentId)
+          const parent = cardsRef.current.get(card.parentId)
+          if (parent) {
+            cursorInsideCurrentParent =
+              cursorCanvasX >= parentAbs.x &&
+              cursorCanvasX <= parentAbs.x + parent.width &&
+              cursorCanvasY >= parentAbs.y &&
+              cursorCanvasY <= parentAbs.y + parent.height
+          }
+        }
+
         let bestTarget: number | null = null
         let bestArea = Infinity
 
-        for (const [id, candidate] of cardsRef.current) {
-          if (id === dragState.cardId) continue
-          if (isAncestor(cardsRef.current, id, dragState.cardId)) continue
-          if (id === card.parentId) continue
+        if (!cursorInsideCurrentParent) {
+          for (const [id, candidate] of cardsRef.current) {
+            if (id === dragState.cardId) continue
+            // Skip descendants of the dragged card (can't nest a parent into its child).
+            if (isAncestor(cardsRef.current, id, dragState.cardId)) continue
+            // Skip ALL ancestors of the dragged card (direct parent, grandparent, etc.).
+            // isAncestor(cards, dragged, candidate) returns true when candidate is
+            // an ancestor of the dragged card.
+            if (isAncestor(cardsRef.current, dragState.cardId, id)) continue
 
-          const absPos = getAbsolutePosition(cardsRef.current, id)
-          const area = candidate.width * candidate.height
+            const absPos = getAbsolutePosition(cardsRef.current, id)
+            const area = candidate.width * candidate.height
 
-          // Hit zone is the full card bounds -- dropping anywhere on a card nests into it.
-          if (
-            cursorCanvasX >= absPos.x &&
-            cursorCanvasX <= absPos.x + candidate.width &&
-            cursorCanvasY >= absPos.y &&
-            cursorCanvasY <= absPos.y + candidate.height &&
-            area < bestArea
-          ) {
-            bestTarget = id
-            bestArea = area
+            // Hit zone is the full card bounds -- dropping anywhere on a card nests into it.
+            if (
+              cursorCanvasX >= absPos.x &&
+              cursorCanvasX <= absPos.x + candidate.width &&
+              cursorCanvasY >= absPos.y &&
+              cursorCanvasY <= absPos.y + candidate.height &&
+              area < bestArea
+            ) {
+              bestTarget = id
+              bestArea = area
+            }
           }
         }
 
@@ -554,7 +585,7 @@ export default function App() {
 
     if (!dragState) return
 
-    const { cardId, nestTargetId } = dragState
+    const { cardId, nestTargetId, absX: dragAbsX, absY: dragAbsY } = dragState
     const card = cardsRef.current.get(cardId)
     setDragState(null)
 
@@ -597,16 +628,21 @@ export default function App() {
       const target = nextCards.get(nestTargetId)
       if (!c || !target) return
 
-      // Place the card below existing children -- no overlap.
-      const stackPos = computeStackedPosition(nextCards, nestTargetId, c.width)
+      // Drop the card at the cursor release position, converted to the new
+      // parent's local coordinate space. This gives the user direct spatial
+      // control over where the card lands -- it drops where they let go, not
+      // at a computed stack position. We clamp to PADDING so the card never
+      // lands partially outside the content area.
+      const dropLocal = canvasToLocal(nextCards, dragAbsX, dragAbsY, nestTargetId)
+      const dropX = Math.max(PADDING, dropLocal.x)
+      const dropY = Math.max(PADDING, dropLocal.y)
 
       const newDepth = target.depth + 1
       nextCards.set(cardId, {
         ...c,
         parentId: nestTargetId,
-        x: stackPos.x,
-        y: stackPos.y,
-        width: stackPos.width,
+        x: dropX,
+        y: dropY,
         depth: newDepth,
         color: getDepthColor(newDepth),
       })
