@@ -367,6 +367,8 @@ export const Card: React.FC<CardProps> = React.memo(({
               onResetSize={onResetSize}
               onAutoFocusConsumed={onAutoFocusConsumed}
               zoom={zoom}
+              onConnectStart={onConnectStart}
+              isConnecting={isConnecting}
             />
           )
         })}
