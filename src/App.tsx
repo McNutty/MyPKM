@@ -472,10 +472,12 @@ export default function App() {
           if (id === dragState.cardId) continue
           // Skip descendants of the dragged card (can't nest a parent into its child).
           if (isAncestor(cardsRef.current, id, dragState.cardId)) continue
-          // When the cursor is inside the current parent, skip the current parent as
-          // a candidate -- the user is repositioning, not re-nesting. Siblings and
-          // all other cards are still valid targets.
-          if (cursorInsideCurrentParent && id === card.parentId) continue
+          // When the cursor is inside the current parent, skip the current parent AND
+          // all of its ancestors -- the user is repositioning within the parent, not
+          // trying to nest into any ancestor. Siblings and unrelated cards are still
+          // valid targets. When the cursor has left the parent's bounds, ancestors
+          // are fair game again (explicit drag-out-and-up is intentional).
+          if (cursorInsideCurrentParent && isAncestor(cardsRef.current, dragState.cardId, id)) continue
 
           const absPos = getAbsolutePosition(cardsRef.current, id)
           const area = candidate.width * candidate.height
