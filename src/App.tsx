@@ -27,6 +27,9 @@ import {
   autoResizeParent,
   getDepthColor,
   nodeWithLayoutToCardData,
+  computeDepths,
+  updateDescendantDepths,
+  normalizeChildPositions,
   PADDING,
   HEADER_HEIGHT,
   MIN_W,
@@ -39,8 +42,8 @@ import { db } from './ipc'
 // FEATURE FLAGS
 // ============================================================================
 
-/** Set to true in M2 when reparenting IPC commands are wired */
-const NESTING_ENABLED = false
+/** M2: nesting, persistence, and breadcrumb are fully wired */
+const NESTING_ENABLED = true
 
 // ============================================================================
 // INFINITE CANVAS COMPONENT
@@ -81,11 +84,15 @@ export default function App() {
         const nodes = await db.getMapNodes(1)
         if (cancelled) return
 
-        const map = new Map<number, CardData>()
+        // Build the flat map first -- depth is unknown until we have all nodes.
+        const raw = new Map<number, CardData>()
         for (const node of nodes) {
-          const card = nodeWithLayoutToCardData(node)
-          map.set(card.id, card)
+          // Pass depth=0 as a placeholder; computeDepths will correct it below.
+          const card = nodeWithLayoutToCardData(node, 0)
+          raw.set(card.id, card)
         }
+        // Task 1: walk the parent chain to assign correct depths to every card.
+        const map = computeDepths(raw)
         setCards(map)
         setError(null)
       } catch (err) {
@@ -405,11 +412,11 @@ export default function App() {
         // but we don't have the original coords. We re-fetch from DB to be safe.
         try {
           const nodes = await db.getMapNodes(1)
-          const map = new Map<number, CardData>()
+          const raw = new Map<number, CardData>()
           for (const node of nodes) {
-            map.set(node.id, nodeWithLayoutToCardData(node))
+            raw.set(node.id, nodeWithLayoutToCardData(node, 0))
           }
-          setCards(map)
+          setCards(computeDepths(raw))
         } catch (fetchErr) {
           console.error('[App] Failed to revert after drag error:', fetchErr)
         }
@@ -417,47 +424,79 @@ export default function App() {
       return
     }
 
-    // NESTING_ENABLED path (M2) -- handle nest/unnest
+    // NESTING_ENABLED path (M2) -- handle nest / unnest / layout-only drag
+
+    // --- NEST: card dropped onto a new parent ---
     if (nestTargetId && nestTargetId !== card.parentId) {
-      setCards((prev) => {
-        let updated = new Map(prev)
-        const c = updated.get(cardId)
-        const target = updated.get(nestTargetId)
-        if (!c || !target) return prev
+      // Capture state before the optimistic update so we can revert if the DB call fails.
+      const stateBefore = new Map(cardsRef.current)
 
-        const absPos = getAbsolutePosition(updated, cardId)
-        const localPos = canvasToLocal(updated, absPos.x, absPos.y, nestTargetId)
+      // Compute final in-memory state.
+      let nextCards = new Map(cardsRef.current)
+      const c = nextCards.get(cardId)
+      const target = nextCards.get(nestTargetId)
+      if (!c || !target) return
 
-        const newDepth = target.depth + 1
-        updated.set(cardId, {
-          ...c,
-          parentId: nestTargetId,
-          x: Math.max(PADDING, localPos.x),
-          y: Math.max(PADDING, localPos.y),
-          depth: newDepth,
-          color: getDepthColor(newDepth),
-        })
+      const absPos = getAbsolutePosition(nextCards, cardId)
+      const localPos = canvasToLocal(nextCards, absPos.x, absPos.y, nestTargetId)
 
-        const updateDescendantDepths = (pid: number, parentDepth: number) => {
-          for (const [id, child] of updated) {
-            if (child.parentId === pid) {
-              const d = parentDepth + 1
-              updated.set(id, { ...child, depth: d, color: getDepthColor(d) })
-              updateDescendantDepths(id, d)
-            }
-          }
-        }
-        updateDescendantDepths(cardId, newDepth)
-
-        updated = autoResizeParent(updated, nestTargetId)
-        if (card.parentId !== null) {
-          updated = autoResizeParent(updated, card.parentId)
-        }
-
-        return updated
+      const newDepth = target.depth + 1
+      nextCards.set(cardId, {
+        ...c,
+        parentId: nestTargetId,
+        x: Math.max(PADDING, localPos.x),
+        y: Math.max(PADDING, localPos.y),
+        depth: newDepth,
+        color: getDepthColor(newDepth),
       })
-    } else if (!nestTargetId && card.parentId !== null) {
-      // Check if card center is outside parent -- UNNEST
+
+      // Propagate depth changes to all descendants via the shared utility.
+      nextCards = updateDescendantDepths(nextCards, cardId, newDepth)
+
+      // Normalize child positions (shift negative-coordinate children back inside padding).
+      nextCards = normalizeChildPositions(nextCards, nestTargetId)
+
+      // Resize the new parent (and its ancestors) to contain the newly nested card.
+      nextCards = autoResizeParent(nextCards, nestTargetId)
+      // Also resize the old parent if the card had one (it may now be smaller).
+      if (card.parentId !== null) {
+        nextCards = autoResizeParent(nextCards, card.parentId)
+      }
+
+      setCards(nextCards)
+
+      // Persist: updateNodeParent atomically sets parent_id and layout coordinates.
+      const finalCard = nextCards.get(cardId)!
+      try {
+        await db.updateNodeParent(
+          cardId,
+          nestTargetId,
+          1,
+          finalCard.x,
+          finalCard.y,
+          finalCard.width,
+          finalCard.height
+        )
+        setError(null)
+      } catch (err) {
+        console.error('[App] Failed to persist nest:', err)
+        // Surface the error. Rust returns user-readable strings for cycle violations.
+        const msg = String(err)
+        if (msg.includes('circular containment')) {
+          setError('Cannot nest: this would create a circular containment.')
+        } else if (msg.includes('cannot be its own parent')) {
+          setError('Cannot nest a card inside itself.')
+        } else {
+          setError(`Failed to save nesting: ${err}`)
+        }
+        // Revert in-memory state to what it was before the optimistic update.
+        setCards(stateBefore)
+      }
+      return
+    }
+
+    // --- UNNEST: card dragged outside its current parent ---
+    if (!nestTargetId && card.parentId !== null) {
       const absPos = getAbsolutePosition(cardsRef.current, cardId)
       const centerX = absPos.x + card.width / 2
       const centerY = absPos.y + card.height / 2
@@ -473,57 +512,74 @@ export default function App() {
           centerY > parentAbs.y + parent.height
 
         if (outside) {
-          setCards((prev) => {
-            let updated = new Map(prev)
-            const c = updated.get(cardId)
-            if (!c) return prev
+          const stateBefore = new Map(cardsRef.current)
 
-            const abs = getAbsolutePosition(updated, cardId)
-            const oldParent = updated.get(c.parentId!)
-            const grandparentId = oldParent?.parentId ?? null
-            const localPos = canvasToLocal(updated, abs.x, abs.y, grandparentId)
+          let nextCards = new Map(cardsRef.current)
+          const c = nextCards.get(cardId)
+          if (!c) return
 
-            const newDepth = grandparentId !== null
-              ? (updated.get(grandparentId)?.depth ?? 0) + 1
-              : 0
+          // The card exits one level up. Its new parent is the current parent's parent.
+          const oldParent = nextCards.get(c.parentId!)
+          const grandparentId = oldParent?.parentId ?? null
 
-            updated.set(cardId, {
-              ...c,
-              parentId: grandparentId,
-              x: localPos.x,
-              y: localPos.y,
-              depth: newDepth,
-              color: getDepthColor(newDepth),
-            })
+          // Convert absolute position to the grandparent's local space
+          // (or canvas root if grandparentId is null).
+          const abs = getAbsolutePosition(nextCards, cardId)
+          const localPos = canvasToLocal(nextCards, abs.x, abs.y, grandparentId)
 
-            const updateDescendantDepths = (pid: number, parentDepth: number) => {
-              for (const [id, child] of updated) {
-                if (child.parentId === pid) {
-                  const d = parentDepth + 1
-                  updated.set(id, { ...child, depth: d, color: getDepthColor(d) })
-                  updateDescendantDepths(id, d)
-                }
-              }
-            }
-            updateDescendantDepths(cardId, newDepth)
+          const newDepth = grandparentId !== null
+            ? (nextCards.get(grandparentId)?.depth ?? 0) + 1
+            : 0
 
-            if (c.parentId !== null) updated = autoResizeParent(updated, c.parentId)
-            if (grandparentId !== null) updated = autoResizeParent(updated, grandparentId)
-
-            return updated
+          nextCards.set(cardId, {
+            ...c,
+            parentId: grandparentId,
+            x: localPos.x,
+            y: localPos.y,
+            depth: newDepth,
+            color: getDepthColor(newDepth),
           })
+
+          // Propagate depth change to all descendants.
+          nextCards = updateDescendantDepths(nextCards, cardId, newDepth)
+
+          // Resize the old parent (may now be smaller) and the grandparent.
+          if (c.parentId !== null) nextCards = autoResizeParent(nextCards, c.parentId)
+          if (grandparentId !== null) nextCards = autoResizeParent(nextCards, grandparentId)
+
+          setCards(nextCards)
+
+          // Persist: updateNodeParent with newParentId = grandparentId (possibly null).
+          const finalCard = nextCards.get(cardId)!
+          try {
+            await db.updateNodeParent(
+              cardId,
+              grandparentId,
+              1,
+              finalCard.x,
+              finalCard.y,
+              finalCard.width,
+              finalCard.height
+            )
+            setError(null)
+          } catch (err) {
+            console.error('[App] Failed to persist unnest:', err)
+            setError(`Failed to save unnesting: ${err}`)
+            setCards(stateBefore)
+          }
+          return
         }
       }
     }
 
-    // Persist final position
+    // --- LAYOUT-ONLY DRAG: same parent, just moved within it ---
     const finalCard = cardsRef.current.get(cardId)
     if (finalCard) {
       try {
         await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height)
         setError(null)
       } catch (err) {
-        console.error('[App] Failed to persist drag position (nesting path):', err)
+        console.error('[App] Failed to persist drag position (layout-only):', err)
         setError('Failed to save position.')
       }
     }
@@ -636,7 +692,13 @@ export default function App() {
           setError(null)
         } catch (err) {
           console.error('[App] Failed to delete card:', err)
-          setError('Failed to delete card.')
+          // Rust returns a descriptive message for the FK RESTRICT case.
+          const msg = String(err)
+          if (msg.includes('has children')) {
+            setError('Cannot delete: this card contains other cards. Remove or move its children first.')
+          } else {
+            setError(`Failed to delete card: ${err}`)
+          }
           // Revert: restore the pre-delete state
           setCards(cardsBefore)
           setSelectedId(id)
@@ -659,6 +721,25 @@ export default function App() {
     if (card.parentId === null) topLevelCards.push(card)
   }
 
+  // Task 4: Breadcrumb -- walk the ancestor chain of the selected card.
+  // Result is ordered root-first: ["Canvas", "Bicycle", "Wheels", "Front Wheel"]
+  // This is display-only in M2; clicking segments is deferred to M3 navigation.
+  const breadcrumb: Array<{ id: number | null; label: string }> = [
+    { id: null, label: 'Canvas' },
+  ]
+  if (selectedId !== null) {
+    const chain: Array<{ id: number; label: string }> = []
+    let current = cards.get(selectedId)
+    while (current) {
+      chain.unshift({
+        id: current.id,
+        label: current.content || `Card ${current.id}`,
+      })
+      current = current.parentId !== null ? cards.get(current.parentId) : undefined
+    }
+    breadcrumb.push(...chain)
+  }
+
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
@@ -676,7 +757,28 @@ export default function App() {
           zIndex: 2000,
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: '#333' }}>Canvas</span>
+        {/* Ancestor trail -- display only in M2, navigation in M3 */}
+        {breadcrumb.map((crumb, index) => (
+          <React.Fragment key={crumb.id ?? 'root'}>
+            {index > 0 && (
+              <span style={{ fontSize: 12, color: '#bbb', userSelect: 'none' }}>{'>'}</span>
+            )}
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: index === breadcrumb.length - 1 ? 600 : 400,
+                color: index === breadcrumb.length - 1 ? '#333' : '#888',
+                maxWidth: 140,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                userSelect: 'none',
+              }}
+            >
+              {crumb.label}
+            </span>
+          </React.Fragment>
+        ))}
         <div style={{ flex: 1 }} />
         {/* Error indicator */}
         {error && (

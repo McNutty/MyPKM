@@ -19,5 +19,13 @@ export interface DbInterface {
   createNode(mapId: number, content: string, x: number, y: number, width: number, height: number): Promise<number>
   updateNodeContent(nodeId: number, content: string): Promise<void>
   updateNodeLayout(nodeId: number, mapId: number, x: number, y: number, width: number, height: number): Promise<void>
+  /**
+   * Reparent a node and update its layout atomically.
+   * Pass `newParentId = null` to unnest a card to top level.
+   * The Rust backend performs self-reference and cycle-detection checks and
+   * returns a descriptive error string on violation -- callers should surface
+   * that string to the user and revert in-memory state.
+   */
+  updateNodeParent(nodeId: number, newParentId: number | null, mapId: number, x: number, y: number, width: number, height: number): Promise<void>
   deleteNode(nodeId: number): Promise<void>
 }

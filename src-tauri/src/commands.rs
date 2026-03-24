@@ -230,3 +230,130 @@ pub fn delete_node(
 
     Ok(())
 }
+
+/// Reparent a node and update its layout atomically.
+///
+/// Sets `nodes.parent_id` to `new_parent_id` (which may be NULL for a
+/// top-level card) and simultaneously writes the new local-coordinate
+/// position to the `layout` row. Both mutations succeed or both roll back.
+///
+/// Cycle detection: before touching the database, we check that
+/// `new_parent_id != node_id` (self-reference). If `new_parent_id` is
+/// Some, we then run a recursive ancestor-chain CTE to verify that
+/// `node_id` does not already appear in the ancestry of the proposed
+/// parent. Setting `parent_id = NULL` (unnesting to top level) bypasses
+/// the cycle check entirely -- NULL cannot form a cycle.
+///
+/// Matches: `DbInterface.updateNodeParent(nodeId, newParentId, mapId, x, y, width, height)`
+#[tauri::command]
+pub fn update_node_parent(
+    state: tauri::State<'_, Mutex<Connection>>,
+    node_id: i64,
+    new_parent_id: Option<i64>,
+    map_id: i64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    // ----------------------------------------------------------------
+    // 1. Self-reference check (no DB call needed).
+    // ----------------------------------------------------------------
+    if new_parent_id == Some(node_id) {
+        return Err(format!(
+            "[db] update_node_parent: node {} cannot be its own parent",
+            node_id
+        ));
+    }
+
+    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+
+    // ----------------------------------------------------------------
+    // 2. Cycle detection (only when reparenting to a real node).
+    //    Walk the ancestor chain of `proposed_parent` upward. If
+    //    `node_id` appears anywhere in that chain, the move would create
+    //    a cycle.
+    // ----------------------------------------------------------------
+    if let Some(proposed_parent) = new_parent_id {
+        let cycle_exists: i64 = conn
+            .query_row(
+                "WITH RECURSIVE ancestor_chain(id, parent_id) AS (
+                     SELECT n.id, n.parent_id
+                     FROM nodes n
+                     WHERE n.id = ?1
+                     UNION ALL
+                     SELECT n.id, n.parent_id
+                     FROM nodes n
+                     INNER JOIN ancestor_chain ac ON n.id = ac.parent_id
+                     WHERE ac.parent_id IS NOT NULL
+                 )
+                 SELECT CASE WHEN EXISTS (
+                     SELECT 1 FROM ancestor_chain WHERE id = ?2
+                 ) THEN 1 ELSE 0 END",
+                rusqlite::params![proposed_parent, node_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_err("update_node_parent cycle detection", e))?;
+
+        if cycle_exists == 1 {
+            return Err(
+                "This move would create a circular containment, which is not allowed."
+                    .to_string(),
+            );
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 3 + 4. UPDATE nodes and layout inside a transaction.
+    // ----------------------------------------------------------------
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN update_node_parent", e))?;
+
+    let result = (|| -> Result<(), rusqlite::Error> {
+        // 3. Update structural parent and bump updated_at.
+        let rows_affected = conn.execute(
+            "UPDATE nodes SET parent_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![new_parent_id, node_id],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        // 4. Update spatial layout (coordinates are local to new parent).
+        let layout_rows_affected = conn.execute(
+            "UPDATE layout SET x = ?1, y = ?2, width = ?3, height = ?4 \
+             WHERE node_id = ?5 AND map_id = ?6",
+            rusqlite::params![x, y, width, height, node_id, map_id],
+        )?;
+
+        if layout_rows_affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    })();
+
+    // ----------------------------------------------------------------
+    // 5. COMMIT or ROLLBACK.
+    // ----------------------------------------------------------------
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT update_node_parent", e))?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            // Distinguish the "not found" case from a generic DB error.
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                Err(format!(
+                    "[db] update_node_parent: node {} or its layout row on map {} not found",
+                    node_id, map_id
+                ))
+            } else {
+                Err(sql_err("update_node_parent transaction", e))
+            }
+        }
+    }
+}

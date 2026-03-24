@@ -55,6 +55,41 @@ export class StubDb implements DbInterface {
     this.nodes.set(nodeId, { ...node, x, y, width, height })
   }
 
+  async updateNodeParent(
+    nodeId: number,
+    newParentId: number | null,
+    _mapId: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number
+  ): Promise<void> {
+    const node = this.nodes.get(nodeId)
+    if (!node) throw new Error(`Node ${nodeId} not found`)
+
+    // Self-reference check
+    if (newParentId === nodeId) {
+      throw new Error(`Node ${nodeId} cannot be its own parent`)
+    }
+
+    // Cycle detection: walk the ancestor chain of newParentId and check for nodeId
+    if (newParentId !== null) {
+      let cursor: number | null = newParentId
+      const visited = new Set<number>()
+      while (cursor !== null) {
+        if (cursor === nodeId) {
+          throw new Error('This move would create a circular containment, which is not allowed.')
+        }
+        if (visited.has(cursor)) break // Safety: stop on already-visited node
+        visited.add(cursor)
+        const ancestor = this.nodes.get(cursor)
+        cursor = ancestor?.parent_id ?? null
+      }
+    }
+
+    this.nodes.set(nodeId, { ...node, parent_id: newParentId, x, y, width, height })
+  }
+
   async deleteNode(nodeId: number): Promise<void> {
     if (!this.nodes.has(nodeId)) throw new Error(`Node ${nodeId} not found`)
     this.nodes.delete(nodeId)

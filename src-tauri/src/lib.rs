@@ -23,6 +23,7 @@ pub fn run() {
             commands::update_node_content,
             commands::update_node_layout,
             commands::delete_node,
+            commands::update_node_parent,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Plectica");

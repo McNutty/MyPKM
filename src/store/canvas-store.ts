@@ -42,10 +42,11 @@ export function getDepthColor(depth: number): string {
 
 /**
  * Map a DB NodeWithLayout record to a CardData for the canvas.
- * At M1 all cards are top-level (depth 0, no parent).
+ * Depth is supplied as a parameter -- use `computeDepths` after building
+ * the full Map to get accurate values. Defaults to 0 for callers that
+ * are creating brand-new top-level cards (e.g. handleDoubleClick).
  */
-export function nodeWithLayoutToCardData(node: NodeWithLayout): CardData {
-  const depth = 0 // M1: all cards at root level
+export function nodeWithLayoutToCardData(node: NodeWithLayout, depth = 0): CardData {
   return {
     id: node.id,
     content: node.content,
@@ -57,6 +58,98 @@ export function nodeWithLayoutToCardData(node: NodeWithLayout): CardData {
     depth,
     color: getDepthColor(depth),
   }
+}
+
+/**
+ * Compute the correct depth for every card in the map and return a new Map
+ * with depth and color fields populated.
+ *
+ * Algorithm: one-pass walk. We maintain a worklist seeded with root cards
+ * (parentId === null, depth = 0). For each card we pop, we set its depth,
+ * then push its children. This is BFS and handles arbitrary node ordering
+ * from the DB -- it does not matter whether parents arrive before children
+ * in the raw NodeWithLayout array.
+ *
+ * This runs once at load time (called from App.tsx after building the
+ * initial Map) and must also be called after any nest/unnest operation
+ * that changes parentId relationships.
+ */
+export function computeDepths(cards: Map<number, CardData>): Map<number, CardData> {
+  const updated = new Map(cards)
+
+  // Build a children index so we can iterate children efficiently.
+  const childrenOf = new Map<number, number[]>()
+  for (const card of updated.values()) {
+    if (card.parentId !== null) {
+      const siblings = childrenOf.get(card.parentId)
+      if (siblings) {
+        siblings.push(card.id)
+      } else {
+        childrenOf.set(card.parentId, [card.id])
+      }
+    }
+  }
+
+  // BFS from roots (parentId === null).
+  const queue: Array<{ id: number; depth: number }> = []
+  for (const card of updated.values()) {
+    if (card.parentId === null) {
+      queue.push({ id: card.id, depth: 0 })
+    }
+  }
+
+  while (queue.length > 0) {
+    const { id, depth } = queue.shift()!
+    const card = updated.get(id)
+    if (!card) continue
+
+    if (card.depth !== depth || card.color !== getDepthColor(depth)) {
+      updated.set(id, { ...card, depth, color: getDepthColor(depth) })
+    }
+
+    const children = childrenOf.get(id)
+    if (children) {
+      for (const childId of children) {
+        queue.push({ id: childId, depth: depth + 1 })
+      }
+    }
+  }
+
+  return updated
+}
+
+/**
+ * Update depths for a card and all its descendants in-place on an existing Map.
+ * Call this after a nest or unnest changes a card's depth so that the entire
+ * subtree gets correct depth colors without a full recompute.
+ *
+ * This is the extracted, shared version of the inline `updateDescendantDepths`
+ * closures that existed in the M1 nesting stubs.
+ */
+export function updateDescendantDepths(
+  cards: Map<number, CardData>,
+  rootId: number,
+  rootDepth: number
+): Map<number, CardData> {
+  const updated = new Map(cards)
+  const root = updated.get(rootId)
+  if (!root) return cards
+
+  updated.set(rootId, { ...root, depth: rootDepth, color: getDepthColor(rootDepth) })
+
+  // Recurse into children.
+  const recurse = (parentId: number, parentDepth: number) => {
+    for (const [id, card] of updated) {
+      if (card.parentId === parentId) {
+        const d = parentDepth + 1
+        updated.set(id, { ...card, depth: d, color: getDepthColor(d) })
+        recurse(id, d)
+      }
+    }
+  }
+  recurse(rootId, rootDepth)
+
+  return updated
 }
 
 /** Get all direct children of a card */
