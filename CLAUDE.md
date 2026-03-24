@@ -37,6 +37,11 @@ See `team/roster.md` for the full roster.
 3. Spawn them using the Agent tool with their system prompt + the specific task
 4. Collect their output and place results in the appropriate project folder
 
+## After Every Confirmed Fix
+
+1. **Always commit** code changes immediately after the user confirms they work. Never let working changes accumulate uncommitted.
+2. **Always update the issue tracker** (`User input/Thoughts on M2.md` or equivalent). Move resolved issues from "New issues" to "Handled issues" with a brief note on how they were fixed. Add new test items to the requirements testing section.
+
 ## About the Team
 
 All team members are **AI agents** defined as markdown files in `.claude/agents/`. They are not humans -- they are modifiable personas. This means:
