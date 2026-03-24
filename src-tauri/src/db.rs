@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS layout (
     y           REAL    NOT NULL,
     width       REAL    NOT NULL CHECK(width > 0),
     height      REAL    NOT NULL CHECK(height > 0),
+    min_width   REAL    DEFAULT NULL,
+    min_height  REAL    DEFAULT NULL,
     UNIQUE(node_id, map_id)
 );
 
@@ -76,6 +78,21 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
 
     // --- 4. Schema DDL (idempotent) ---
     conn.execute_batch(SCHEMA_DDL)?;
+
+    // --- 4a. Additive migrations for existing databases ---
+    // ALTER TABLE ADD COLUMN is idempotent here: we match on the "duplicate
+    // column name" error text and silently ignore it so this block is safe to
+    // run on every startup regardless of DB age.
+    for sql in &[
+        "ALTER TABLE layout ADD COLUMN min_width  REAL DEFAULT NULL",
+        "ALTER TABLE layout ADD COLUMN min_height REAL DEFAULT NULL",
+    ] {
+        if let Err(e) = conn.execute_batch(sql) {
+            if !e.to_string().contains("duplicate column name") {
+                return Err(e);
+            }
+        }
+    }
 
     // --- 5. Seed default map if none exists ---
     let map_count: i64 = conn.query_row(
