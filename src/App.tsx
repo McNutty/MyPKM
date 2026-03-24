@@ -18,7 +18,7 @@
  * - Ctrl+0 or zoom-to-fit button to fit all cards
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import type { CardData, CanvasViewport, DragState, ResizeState, RelationshipData, ConnectingState } from './store/types'
 import {
   getAbsolutePosition,
@@ -102,6 +102,21 @@ export default function App() {
   // Keep a stable ref for relationships (needed in async handlers and key listeners)
   const relationshipsRef = useRef(relationships)
   useEffect(() => { relationshipsRef.current = relationships }, [relationships])
+
+  // Index: card ID -> all relationships that card is an endpoint of.
+  // Used during card drag to move connected relationship label cards proportionally.
+  const relsByCard = useMemo(() => {
+    const map = new Map<number, RelationshipData[]>()
+    for (const rel of relationships) {
+      if (!map.has(rel.sourceId)) map.set(rel.sourceId, [])
+      map.get(rel.sourceId)!.push(rel)
+      if (!map.has(rel.targetId)) map.set(rel.targetId, [])
+      map.get(rel.targetId)!.push(rel)
+    }
+    return map
+  }, [relationships])
+  const relsByCardRef = useRef(relsByCard)
+  useEffect(() => { relsByCardRef.current = relsByCard }, [relsByCard])
 
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -411,7 +426,7 @@ export default function App() {
       // (those are mutually exclusive with a pending drag in practice, but
       // the guard keeps the logic airtight).
       const pending = pendingDragRef.current
-      if (pending && !dragState && !resizeState) {
+      if (pending && !dragState && !resizeState && draggingRelCardId === null) {
         const dist =
           Math.abs(e.clientX - pending.startClientX) +
           Math.abs(e.clientY - pending.startClientY)
@@ -671,6 +686,100 @@ export default function App() {
         )
       }
 
+      // Move connected relationship label cards proportionally.
+      // When a card moves by (dx, dy), each label card on a connected relationship
+      // shifts by a weighted fraction of that delta. Weight is how close the label
+      // is to the moving card (1.0 = at the moving card, 0.0 = at the other endpoint).
+      // Labels at (0,0) (never dragged -- auto-recomputed as midpoint each frame) are skipped.
+      const prevAbsX = dragState.absX
+      const prevAbsY = dragState.absY
+      const dxLabel = newAbsX - prevAbsX
+      const dyLabel = newAbsY - prevAbsY
+
+      if (dxLabel !== 0 || dyLabel !== 0) {
+        // Collect the full set of card IDs that are physically moving this frame:
+        // the dragged card itself plus all its descendants (they translate by the
+        // same absolute delta because their positions are expressed in their
+        // parent's local coordinate space, which moves with the dragged card).
+        const movingCardIds = new Set<number>([dragState.cardId])
+        for (const [id] of cardsRef.current) {
+          if (isAncestor(cardsRef.current, id, dragState.cardId)) {
+            movingCardIds.add(id)
+          }
+        }
+
+        // Union of all relationships touching any moving card, deduped by rel.id.
+        const seenRelIds = new Set<number>()
+        const allMovingRels: RelationshipData[] = []
+        for (const movingId of movingCardIds) {
+          const rels = relsByCardRef.current.get(movingId)
+          if (!rels) continue
+          for (const rel of rels) {
+            if (!seenRelIds.has(rel.id)) {
+              seenRelIds.add(rel.id)
+              allMovingRels.push(rel)
+            }
+          }
+        }
+
+        if (allMovingRels.length) {
+          setRelCardPositions((prev) => {
+            const next = new Map(prev)
+            for (const rel of allMovingRels) {
+              const stored = next.get(rel.id)
+              if (!stored || (stored.x === 0 && stored.y === 0)) continue // default midpoint recomputes naturally
+
+              const sourceMoving = movingCardIds.has(rel.sourceId)
+              const targetMoving = movingCardIds.has(rel.targetId)
+
+              // Both endpoints are moving (e.g. relationship between two children of
+              // the dragged card) -- the label translates by the full delta.
+              if (sourceMoving && targetMoving) {
+                next.set(rel.id, { x: stored.x + dxLabel, y: stored.y + dyLabel })
+                continue
+              }
+
+              // One endpoint is moving. Determine which card is the "moving" one
+              // and which is the stationary "other" so we can compute a weight.
+              const movingCardId = sourceMoving ? rel.sourceId : rel.targetId
+              const otherCardId  = sourceMoving ? rel.targetId  : rel.sourceId
+
+              const movingCard = cardsRef.current.get(movingCardId)
+              const otherCard  = cardsRef.current.get(otherCardId)
+
+              if (!otherCard) {
+                next.set(rel.id, { x: stored.x + dxLabel * 0.5, y: stored.y + dyLabel * 0.5 })
+                continue
+              }
+
+              // Moving card's center: use its current absolute position (before
+              // the in-frame update) as the reference point for weight calculation.
+              const movingAbs = movingCardId === dragState.cardId
+                ? { x: prevAbsX, y: prevAbsY }
+                : getAbsolutePosition(cardsRef.current, movingCardId)
+              const movingCx = movingAbs.x + (movingCard?.width ?? 0) / 2
+              const movingCy = movingAbs.y + (movingCard?.height ?? 0) / 2
+
+              const otherAbs = getAbsolutePosition(cardsRef.current, otherCardId)
+              const otherCx = otherAbs.x + otherCard.width / 2
+              const otherCy = otherAbs.y + otherCard.height / 2
+
+              // Distance-based weight: how far the label is from each endpoint.
+              // weight=1.0 → label is at the moving card (moves fully with it).
+              // weight=0.0 → label is at the other card (stays put).
+              // Stable for curved arrows, close cards, and crossing cards because
+              // distances are always positive -- no axis direction or sign flips.
+              const distToMoving = Math.hypot(stored.x - movingCx, stored.y - movingCy)
+              const distToOther  = Math.hypot(stored.x - otherCx,  stored.y - otherCy)
+              const totalDist = distToMoving + distToOther
+              const weight = totalDist > 1 ? distToOther / totalDist : 0.5
+              next.set(rel.id, { x: stored.x + dxLabel * weight, y: stored.y + dyLabel * weight })
+            }
+            return next
+          })
+        }
+      }
+
       // Update card position (local coords relative to current parent).
       // No autoResizeParent here -- parent resize fires once on mouse-up, not
       // on every frame. Firing it during drag caused the parent to chase the
@@ -687,6 +796,54 @@ export default function App() {
     },
     [dragState, resizeState, isPanning, connectingState, draggingRelCardId, relCardDragOffset, viewport]
   )
+
+  // ---------------------------------------------------------------------------
+  // HELPERS
+  // ---------------------------------------------------------------------------
+
+  // Returns the deduplicated set of relationships connected to a dragged card
+  // OR to any of its descendants. Used by handleMouseUp to persist label
+  // positions for all relationships that may have shifted during the drag,
+  // including those on child cards that moved because their parent was dragged.
+  const getRelsForDraggedSubtree = useCallback((cardId: number) => {
+    const seenIds = new Set<number>()
+    const result: typeof relationshipsRef.current = []
+
+    const addRels = (id: number) => {
+      const rels = relsByCardRef.current.get(id)
+      if (!rels) return
+      for (const rel of rels) {
+        if (!seenIds.has(rel.id)) {
+          seenIds.add(rel.id)
+          result.push(rel)
+        }
+      }
+    }
+
+    addRels(cardId)
+    for (const [id] of cardsRef.current) {
+      if (isAncestor(cardsRef.current, id, cardId)) {
+        addRels(id)
+      }
+    }
+
+    return result
+  }, [])
+
+  // Persists rel card positions for all relationships in the given list.
+  // Skips rels with no relNodeId and positions still at the default (0,0).
+  const persistRelCardPositions = useCallback(async (rels: typeof relationshipsRef.current) => {
+    for (const rel of rels) {
+      if (rel.relNodeId === null) continue
+      const pos = relCardPositionsRef.current.get(rel.id)
+      if (!pos || (pos.x === 0 && pos.y === 0)) continue
+      try {
+        await db.updateNodeLayout(rel.relNodeId, 1, pos.x, pos.y, 80, 28, null, null)
+      } catch (err) {
+        console.error('[App] Failed to persist rel card position after card drag:', err)
+      }
+    }
+  }, [])
 
   // ---------------------------------------------------------------------------
   // MOUSE UP (end drag, resize, or pan -- persist to DB)
@@ -852,6 +1009,11 @@ export default function App() {
           console.error('[App] Failed to revert after drag error:', fetchErr)
         }
       }
+
+      // Persist relationship label positions for the dragged card and all its
+      // descendants (children move with the parent, so their rel labels shift too).
+      await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
+
       return
     }
 
@@ -940,6 +1102,11 @@ export default function App() {
         // Revert in-memory state to what it was before the optimistic update.
         setCards(stateBefore)
       }
+
+      // Persist relationship label positions for the dragged card and all its
+      // descendants (children move with the parent, so their rel labels shift too).
+      await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
+
       return
     }
 
@@ -1034,6 +1201,11 @@ export default function App() {
             setError(`Failed to save unnesting: ${err}`)
             setCards(stateBefore)
           }
+
+          // Persist relationship label positions for the dragged card and all its
+          // descendants (children move with the parent, so their rel labels shift too).
+          await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
+
           return
         }
       }
@@ -1091,6 +1263,11 @@ export default function App() {
             console.error('[App] Failed to persist layout-only drag with normalize/resize:', err)
             setError('Failed to save position.')
           }
+
+          // Persist relationship label positions for the dragged card and all its
+          // descendants (children move with the parent, so their rel labels shift too).
+          await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
+
           return
         }
       }
@@ -1103,8 +1280,12 @@ export default function App() {
         console.error('[App] Failed to persist drag position (layout-only):', err)
         setError('Failed to save position.')
       }
+
+      // Persist relationship label positions for the dragged card and all its
+      // descendants (children move with the parent, so their rel labels shift too).
+      await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
     }
-  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, draggingRelCardId, relCardDragOffset])
+  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, draggingRelCardId, relCardDragOffset, persistRelCardPositions, getRelsForDraggedSubtree])
 
   // ---------------------------------------------------------------------------
   // CREATE NEW CARD (double-click on empty canvas)

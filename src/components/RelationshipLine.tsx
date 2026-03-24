@@ -73,9 +73,13 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
 }) => {
   const isUnlabeled = rel.action === ''
 
-  // Compute edge-to-edge endpoints using the card center -> card center direction.
-  // For a curved line the "direction" we feed to computeEdgePoint should still
-  // aim toward the opposite card's center so the arrowhead exits/enters cleanly.
+  // Compute edge-to-edge endpoints by aiming toward the relationship label card
+  // position rather than the opposite card's center. The Bezier curve goes
+  // source -> labelCard -> target, so the arrow should exit/enter each card
+  // in the direction of the label card. This means two relationships between
+  // the same pair of cards exit at different points when their label cards are
+  // pulled in different directions. When the label card sits at the geometric
+  // midpoint (default), this is nearly identical to center-to-center aiming.
   const sourceCenter = {
     x: sourcePos.x + sourcePos.width / 2,
     y: sourcePos.y + sourcePos.height / 2,
@@ -85,14 +89,17 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
     y: targetPos.y + targetPos.height / 2,
   }
 
+  // Label card position as the aim target for both edge points.
+  const labelCardPos = { x: cardX, y: cardY }
+
   const start = computeEdgePoint(
     sourceCenter,
-    targetCenter,
+    labelCardPos,
     { x: sourcePos.x, y: sourcePos.y, w: sourcePos.width, h: sourcePos.height }
   )
   const end = computeEdgePoint(
     targetCenter,
-    sourceCenter,
+    labelCardPos,
     { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height }
   )
 

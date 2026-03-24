@@ -40,7 +40,7 @@ See `team/roster.md` for the full roster.
 ## After Every Confirmed Fix
 
 1. **Always commit** code changes immediately after the user confirms they work. Never let working changes accumulate uncommitted.
-2. **Always update the issue tracker** (`User input/Thoughts on M2.md` or equivalent). Move resolved issues from "New issues" to "Handled issues" with a brief note on how they were fixed. Add new test items to the requirements testing section.
+2. **Always update the issue tracker** (`User input/User requirements M<N>.md`). Move resolved issues from "New issues" to "Handled issues" with a brief note on how they were fixed. Add new test items to the requirements testing section.
 
 ## Session Continuity
 
@@ -49,7 +49,7 @@ When starting a new session, orient yourself using these resources:
 1. **This file (CLAUDE.md)** — Delegation rules, team roster, workflow (commit + update thoughts after each fix)
 2. **Memory files** (`~/.claude/projects/.../memory/`) — Project status, user preferences, all feedback. Check `MEMORY.md` index first.
 3. **Git log** (`git log --oneline -20`) — Clean commit trail with descriptive messages showing recent work
-4. **`User input/Thoughts on M<N>.md`** — Live issue tracker for the current milestone. Check for new issues first, delegate fixes, update after confirmation.
+4. **`User input/User requirements M<N>.md`** — Live issue tracker for the current milestone. Check for new issues first, delegate fixes, update after confirmation.
 5. **`docs/m<N>-kickoff.md`** — Authoritative spec for the current milestone. Supporting docs (Derek's DSRP analysis, Maren's drafts) are in the same folder.
 
 ## About the Team
