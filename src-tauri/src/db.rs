@@ -43,6 +43,19 @@ CREATE TABLE IF NOT EXISTS layout (
 
 CREATE INDEX IF NOT EXISTS idx_layout_map_id ON layout(map_id);
 CREATE INDEX IF NOT EXISTS idx_layout_node_id ON layout(node_id);
+
+CREATE TABLE IF NOT EXISTS relationships (
+    id          INTEGER PRIMARY KEY,
+    source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    action      TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    metadata    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rel_source ON relationships(source_id);
+CREATE INDEX IF NOT EXISTS idx_rel_target ON relationships(target_id);
 ";
 
 /// Open (or create) the SQLite database for Plectica in the app data directory.

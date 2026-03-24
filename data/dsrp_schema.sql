@@ -14,7 +14,7 @@
 --   3. layout  — visual positions (nodes on maps)
 --
 -- What is NOT in this file (deferred to future phases):
---   - Phase 2: relationship_edges table, node_type = 'relationship'
+--   - Phase 2 (done): relationships table added below
 --   - Phase 3: perspectives table, perspective_layout
 --   - Post-MVP: nodes_fts (FTS5 full-text search)
 --   - Future: UUID primary key migration for collaboration
@@ -176,6 +176,51 @@ CREATE INDEX idx_layout_map_id ON layout(map_id);
 -- (Also enforced by the UNIQUE constraint, which implies an index,
 -- but an explicit index is clearer and ensures query planner use.)
 CREATE INDEX idx_layout_node_id ON layout(node_id);
+
+
+-- ============================================================
+-- TABLE: relationships
+-- ============================================================
+-- A relationship row is a first-class DSRP Relationship entity.
+-- It connects two Distinctions (nodes) with a directional link.
+--
+-- DSRP constraint R-5: Relationships are not just edges --
+-- they are entities with their own identity. Each row has its
+-- own id, timestamps, and optional metadata. This structure
+-- allows relationships to be labeled, styled, and queried as
+-- objects in their own right.
+--
+-- Direction: source_id --> target_id
+-- The `action` column carries the relationship label
+-- (e.g., "supports", "regulates", "causes"). Empty string
+-- is valid and means the relationship is unlabeled /
+-- in-progress. NULL is not used; use ''.
+--
+-- Map scoping: relationships are currently map-agnostic.
+-- get_map_relationships returns all relationships. When a
+-- map_id column is added in a future phase, add it here and
+-- add the corresponding index.
+--
+-- ON DELETE CASCADE (both FKs): deleting a node silently
+-- removes all relationships in which it participates.
+-- This is the user's chosen behavior for M3.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS relationships (
+    id          INTEGER PRIMARY KEY,
+    source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    action      TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    metadata    TEXT    -- must be valid JSON or NULL; enforced at app layer
+);
+
+-- Index for "all relationships where this node is the source"
+CREATE INDEX IF NOT EXISTS idx_rel_source ON relationships(source_id);
+
+-- Index for "all relationships where this node is the target"
+CREATE INDEX IF NOT EXISTS idx_rel_target ON relationships(target_id);
 
 
 -- ============================================================

@@ -24,6 +24,11 @@ pub fn run() {
             commands::update_node_layout,
             commands::delete_node,
             commands::update_node_parent,
+            commands::create_relationship,
+            commands::get_map_relationships,
+            commands::update_relationship,
+            commands::flip_relationship,
+            commands::delete_relationship,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Plectica");

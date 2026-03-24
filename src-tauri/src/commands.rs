@@ -239,6 +239,167 @@ pub fn delete_node(
     Ok(())
 }
 
+// ============================================================
+// Relationship commands
+// ============================================================
+
+/// A relationship between two nodes.
+/// Field names match the TypeScript `RelationshipData` interface in
+/// `src/ipc/db.ts` exactly (snake_case serialized via serde).
+#[derive(Debug, Serialize)]
+pub struct RelationshipData {
+    pub id: i64,
+    pub source_id: i64,
+    pub target_id: i64,
+    pub action: String,
+}
+
+/// Insert a new relationship between two nodes.
+/// Returns the created relationship including its new ID.
+///
+/// `map_id` is accepted for API consistency but not yet stored --
+/// relationships are currently map-agnostic (one canvas per app).
+/// When relationships gain a map_id column this parameter will be used.
+///
+/// Matches: `DbInterface.createRelationship(sourceId, targetId, action, mapId)`
+#[tauri::command]
+pub fn create_relationship(
+    state: tauri::State<'_, Mutex<Connection>>,
+    source_id: i64,
+    target_id: i64,
+    action: String,
+    _map_id: i64,
+) -> Result<RelationshipData, String> {
+    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+
+    conn.execute(
+        "INSERT INTO relationships (source_id, target_id, action) \
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![source_id, target_id, action],
+    )
+    .map_err(|e| sql_err("create_relationship", e))?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(RelationshipData { id, source_id, target_id, action })
+}
+
+/// Return all relationships.
+/// For now the single-map invariant means this is equivalent to
+/// "all relationships on the given map." When relationships gain
+/// a map_id column, filter by it here.
+///
+/// Matches: `DbInterface.getMapRelationships(mapId)`
+#[tauri::command]
+pub fn get_map_relationships(
+    state: tauri::State<'_, Mutex<Connection>>,
+    _map_id: i64,
+) -> Result<Vec<RelationshipData>, String> {
+    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, source_id, target_id, action FROM relationships",
+        )
+        .map_err(|e| sql_err("prepare get_map_relationships", e))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(RelationshipData {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                target_id: row.get(2)?,
+                action: row.get(3)?,
+            })
+        })
+        .map_err(|e| sql_err("query get_map_relationships", e))?;
+
+    let mut rels = Vec::new();
+    for row in rows {
+        rels.push(row.map_err(|e| sql_err("row get_map_relationships", e))?);
+    }
+
+    Ok(rels)
+}
+
+/// Update the action label on a relationship. Also bumps updated_at.
+///
+/// Matches: `DbInterface.updateRelationship(id, action)`
+#[tauri::command]
+pub fn update_relationship(
+    state: tauri::State<'_, Mutex<Connection>>,
+    id: i64,
+    action: String,
+) -> Result<(), String> {
+    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE relationships SET action = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![action, id],
+        )
+        .map_err(|e| sql_err("update_relationship", e))?;
+
+    if rows_affected == 0 {
+        return Err(format!("[db] update_relationship: relationship {} not found", id));
+    }
+
+    Ok(())
+}
+
+/// Swap the direction of a relationship: source_id <-> target_id.
+/// SQLite evaluates the SET expressions using the old column values,
+/// so a single UPDATE statement is sufficient -- no temporaries needed.
+///
+/// Matches: `DbInterface.flipRelationship(id)`
+#[tauri::command]
+pub fn flip_relationship(
+    state: tauri::State<'_, Mutex<Connection>>,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE relationships \
+             SET source_id = target_id, target_id = source_id, \
+                 updated_at = datetime('now') \
+             WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .map_err(|e| sql_err("flip_relationship", e))?;
+
+    if rows_affected == 0 {
+        return Err(format!("[db] flip_relationship: relationship {} not found", id));
+    }
+
+    Ok(())
+}
+
+/// Delete a relationship by ID.
+///
+/// Matches: `DbInterface.deleteRelationship(id)`
+#[tauri::command]
+pub fn delete_relationship(
+    state: tauri::State<'_, Mutex<Connection>>,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+
+    let rows_affected = conn
+        .execute(
+            "DELETE FROM relationships WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .map_err(|e| sql_err("delete_relationship", e))?;
+
+    if rows_affected == 0 {
+        return Err(format!("[db] delete_relationship: relationship {} not found", id));
+    }
+
+    Ok(())
+}
+
 /// Reparent a node and update its layout atomically.
 ///
 /// Sets `nodes.parent_id` to `new_parent_id` (which may be NULL for a
