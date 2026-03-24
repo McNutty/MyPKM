@@ -27,9 +27,11 @@ export class TauriDb implements DbInterface {
     x: number,
     y: number,
     width: number,
-    height: number
+    height: number,
+    minWidth: number | null,
+    minHeight: number | null
   ): Promise<void> {
-    return invoke('update_node_layout', { nodeId, mapId, x, y, width, height })
+    return invoke('update_node_layout', { nodeId, mapId, x, y, width, height, minWidth, minHeight })
   }
 
   async updateNodeParent(
@@ -39,11 +41,13 @@ export class TauriDb implements DbInterface {
     x: number,
     y: number,
     width: number,
-    height: number
+    height: number,
+    minWidth: number | null,
+    minHeight: number | null
   ): Promise<void> {
     // Tauri v2 auto-converts snake_case Rust param names to camelCase on the JS side.
-    // The Rust command signature uses node_id, new_parent_id, map_id, x, y, width, height.
-    return invoke('update_node_parent', { nodeId, newParentId, mapId, x, y, width, height })
+    // The Rust command signature uses node_id, new_parent_id, map_id, x, y, width, height, min_width, min_height.
+    return invoke('update_node_parent', { nodeId, newParentId, mapId, x, y, width, height, minWidth, minHeight })
   }
 
   async deleteNode(nodeId: number): Promise<void> {

@@ -26,6 +26,13 @@ export interface CardData {
   depth: number
   /** Background color (derived from depth) */
   color: string
+  /**
+   * Minimum width/height remembered from the last manual resize.
+   * autoResizeParent will never shrink this card below these values.
+   * null means no floor -- autoResizeParent uses MIN_W/MIN_H as the floor.
+   */
+  minWidth: number | null
+  minHeight: number | null
 }
 
 export interface CanvasViewport {

@@ -59,6 +59,8 @@ export function nodeWithLayoutToCardData(node: NodeWithLayout, depth = 0): CardD
     parentId: node.parent_id,
     depth,
     color: getDepthColor(depth),
+    minWidth: node.min_width,
+    minHeight: node.min_height,
   }
 }
 
@@ -229,11 +231,16 @@ export function autoResizeParent(
       maxBottom = Math.max(maxBottom, child.y + child.height)
     }
 
-    const neededW = Math.max(MIN_W, maxRight + PADDING)
-    const neededH = Math.max(MIN_H, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+    // Respect any manually-set size floor. If the parent has been manually
+    // resized, minWidth/minHeight record that floor so autoResizeParent never
+    // shrinks it back below the user's chosen size.
+    const floorW = parent.minWidth ?? MIN_W
+    const floorH = parent.minHeight ?? MIN_H
+    const neededW = Math.max(floorW, maxRight + PADDING)
+    const neededH = Math.max(floorH, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
 
-    const newW = Math.max(MIN_W, neededW)
-    const newH = Math.max(MIN_H, neededH)
+    const newW = Math.max(floorW, neededW)
+    const newH = Math.max(floorH, neededH)
 
     if (newW !== parent.width || newH !== parent.height) {
       updated.set(currentParentId, { ...parent, width: newW, height: newH })

@@ -329,7 +329,9 @@ export default function App() {
             const updated = new Map(prev)
             const c = updated.get(pending.cardId)
             if (!c) return prev
-            updated.set(pending.cardId, { ...c, width: newW, height: newH })
+            // Set the floor immediately so autoResizeParent respects it even on
+            // the very first frame of a resize drag.
+            updated.set(pending.cardId, { ...c, width: newW, height: newH, minWidth: newW, minHeight: newH })
             if (c.parentId !== null) {
               return autoResizeParent(updated, c.parentId)
             }
@@ -405,7 +407,9 @@ export default function App() {
           const updated = new Map(prev)
           const card = updated.get(resizeState.cardId)
           if (!card) return prev
-          updated.set(resizeState.cardId, { ...card, width: newW, height: newH })
+          // Update minWidth/minHeight in-memory during drag so that if
+          // autoResizeParent fires on the parent chain the floor is already set.
+          updated.set(resizeState.cardId, { ...card, width: newW, height: newH, minWidth: newW, minHeight: newH })
           if (card.parentId !== null) {
             return autoResizeParent(updated, card.parentId)
           }
@@ -505,17 +509,29 @@ export default function App() {
     }
 
     if (resizeState) {
-      // Persist resize
+      // Persist resize. The card already has minWidth/minHeight set to its current
+      // dimensions (updated during the drag in handleMouseMove), so we read them
+      // back from state and write them through to the DB.
       const card = cardsRef.current.get(resizeState.cardId)
       setResizeState(null)
 
       if (card) {
+        // Commit the floor: the post-resize size becomes the new minimum.
+        const finalMinW = card.width
+        const finalMinH = card.height
+        setCards((prev) => {
+          const updated = new Map(prev)
+          const c = updated.get(resizeState.cardId)
+          if (!c) return prev
+          updated.set(resizeState.cardId, { ...c, minWidth: finalMinW, minHeight: finalMinH })
+          return updated
+        })
         try {
-          await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height)
+          await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height, finalMinW, finalMinH)
         } catch (err) {
           console.error('[App] Failed to persist resize:', err)
           setError('Failed to save resize. Changes may be lost.')
-          // Revert: restore the pre-resize size
+          // Revert: restore the pre-resize size and clear the floor
           setCards((prev) => {
             const updated = new Map(prev)
             const current = updated.get(resizeState.cardId)
@@ -524,6 +540,8 @@ export default function App() {
               ...current,
               width: resizeState.startWidth,
               height: resizeState.startHeight,
+              minWidth: null,
+              minHeight: null,
             })
             return updated
           })
@@ -543,7 +561,7 @@ export default function App() {
     // M1: NESTING DISABLED -- just persist the new position
     if (!NESTING_ENABLED) {
       try {
-        await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height)
+        await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight)
         setError(null)
       } catch (err) {
         console.error('[App] Failed to persist drag position:', err)
@@ -625,7 +643,9 @@ export default function App() {
           finalCard.x,
           finalCard.y,
           finalCard.width,
-          finalCard.height
+          finalCard.height,
+          finalCard.minWidth,
+          finalCard.minHeight
         )
         setError(null)
       } catch (err) {
@@ -726,7 +746,9 @@ export default function App() {
               finalCard.x,
               finalCard.y,
               finalCard.width,
-              finalCard.height
+              finalCard.height,
+              finalCard.minWidth,
+              finalCard.minHeight
             )
             setError(null)
           } catch (err) {
@@ -781,7 +803,7 @@ export default function App() {
               card.width !== before.width ||
               card.height !== before.height
             ) {
-              writes.push(db.updateNodeLayout(id, 1, card.x, card.y, card.width, card.height))
+              writes.push(db.updateNodeLayout(id, 1, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
             }
           }
           try {
@@ -797,7 +819,7 @@ export default function App() {
 
       // No parent changes needed (or card is top-level) -- just persist the card.
       try {
-        await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height)
+        await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height, finalCard.minWidth, finalCard.minHeight)
         setError(null)
       } catch (err) {
         console.error('[App] Failed to persist drag position (layout-only):', err)
@@ -834,6 +856,8 @@ export default function App() {
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
+          minWidth: null,
+          minHeight: null,
         }
         setCards((prev) => {
           const updated = new Map(prev)
@@ -892,12 +916,37 @@ export default function App() {
       const card = cardsRef.current.get(cardId)
       if (!card) return
 
-      // Optimistic update
+      const children = getChildren(cardsRef.current, cardId)
+      const isParent = children.length > 0
+
+      let resetW: number
+      let resetH: number
+
+      if (isParent) {
+        // Parent card: fit tightly to the children bounding box (same logic as
+        // autoResizeParent, but applied directly so we can compute the target size
+        // without triggering the floor guard -- we're clearing the floor here).
+        let maxRight = 0
+        let maxBottom = 0
+        for (const child of children) {
+          maxRight = Math.max(maxRight, child.x + child.width)
+          maxBottom = Math.max(maxBottom, child.y + child.height)
+        }
+        resetW = Math.max(MIN_W, maxRight + PADDING)
+        resetH = Math.max(MIN_H, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+      } else {
+        // Leaf card: snap back to the baseline minimum dimensions.
+        resetW = MIN_W
+        resetH = MIN_H
+      }
+
+      // Optimistic update -- clear the floor (minWidth/minHeight = null) so
+      // autoResizeParent can shrink this card freely from now on.
       setCards((prev) => {
         let updated = new Map(prev)
         const c = updated.get(cardId)
         if (!c) return prev
-        updated.set(cardId, { ...c, width: MIN_W, height: MIN_H })
+        updated.set(cardId, { ...c, width: resetW, height: resetH, minWidth: null, minHeight: null })
         // If the card has a parent, re-run auto-resize so the parent adjusts.
         if (c.parentId !== null) {
           updated = autoResizeParent(updated, c.parentId)
@@ -905,21 +954,19 @@ export default function App() {
         return updated
       })
 
-      // Persist after the state update captures the new size
+      // Persist -- floor cleared (null, null).
       try {
-        // Read back the card after the optimistic update (use MIN_W/MIN_H directly
-        // since the state setter is async and we know exactly what we set).
-        await db.updateNodeLayout(cardId, 1, card.x, card.y, MIN_W, MIN_H)
+        await db.updateNodeLayout(cardId, 1, card.x, card.y, resetW, resetH, null, null)
         setError(null)
       } catch (err) {
         console.error('[App] Failed to persist reset size:', err)
         setError('Failed to save size reset.')
-        // Revert
+        // Revert to original size and floor
         setCards((prev) => {
           const updated = new Map(prev)
           const c = updated.get(cardId)
           if (!c) return prev
-          updated.set(cardId, { ...c, width: card.width, height: card.height })
+          updated.set(cardId, { ...c, width: card.width, height: card.height, minWidth: card.minWidth, minHeight: card.minHeight })
           return updated
         })
       }
