@@ -25,6 +25,7 @@ import {
   canvasToLocal,
   isAncestor,
   autoResizeParent,
+  getChildren,
   getDepthColor,
   nodeWithLayoutToCardData,
   computeDepths,
@@ -272,49 +273,91 @@ export default function App() {
         const dist =
           Math.abs(e.clientX - pending.startClientX) +
           Math.abs(e.clientY - pending.startClientY)
-        if (dist > DRAG_THRESHOLD) {
-          // Threshold crossed -- decide whether this is a RESIZE or a DRAG
-          // based on where the original mousedown landed relative to the card.
-          const card = cardsRef.current.get(pending.cardId)
-          if (card) {
-            const RESIZE_EDGE = 16
-            let isResize = false
-            if (pending.cardRect) {
-              const localX = pending.startClientX - pending.cardRect.left
-              const localY = pending.startClientY - pending.cardRect.top
-              const nearRight = localX >= pending.cardRect.width - RESIZE_EDGE
-              const nearBottom = localY >= pending.cardRect.height - RESIZE_EDGE
-              isResize = nearRight || nearBottom
-            }
-
-            if (isResize) {
-              // Promote to resize
-              setResizeState({
-                cardId: pending.cardId,
-                handle: 'se',
-                startWidth: card.width,
-                startHeight: card.height,
-                startMouseX: pending.startClientX,
-                startMouseY: pending.startClientY,
-              })
-            } else {
-              // Promote to drag
-              const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
-              const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
-              const absPos = getAbsolutePosition(cardsRef.current, pending.cardId)
-              setDragState({
-                cardId: pending.cardId,
-                offsetX: canvasX - absPos.x,
-                offsetY: canvasY - absPos.y,
-                nestTargetId: null,
-                absX: absPos.x,
-                absY: absPos.y,
-              })
-            }
-          }
-          pendingDragRef.current = null
+        if (dist <= DRAG_THRESHOLD) {
+          // Below threshold: do nothing, wait for more movement or mouseup.
+          return
         }
-        // Below threshold: do nothing, wait for more movement or mouseup.
+
+        // Threshold crossed -- decide whether this is a RESIZE or a DRAG
+        // based on where the original mousedown landed relative to the card.
+        pendingDragRef.current = null
+        const card = cardsRef.current.get(pending.cardId)
+        if (!card) return
+
+        const RESIZE_EDGE = 16
+        let isResize = false
+        if (pending.cardRect) {
+          const localX = pending.startClientX - pending.cardRect.left
+          const localY = pending.startClientY - pending.cardRect.top
+          const nearRight = localX >= pending.cardRect.width - RESIZE_EDGE
+          const nearBottom = localY >= pending.cardRect.height - RESIZE_EDGE
+          isResize = nearRight || nearBottom
+        }
+
+        if (isResize) {
+          // Promote to resize. We also apply the first frame of resize movement
+          // immediately here, rather than waiting for the next mousemove event
+          // after React commits the state update. Without this, the promotion
+          // frame is always dropped and resize feels unresponsive.
+          const promotedResize: ResizeState = {
+            cardId: pending.cardId,
+            handle: 'se',
+            startWidth: card.width,
+            startHeight: card.height,
+            startMouseX: pending.startClientX,
+            startMouseY: pending.startClientY,
+          }
+          setResizeState(promotedResize)
+
+          // Apply first resize delta inline using the locally-scoped state object.
+          const dx = (e.clientX - promotedResize.startMouseX) / viewport.zoom
+          const dy = (e.clientY - promotedResize.startMouseY) / viewport.zoom
+          let newW = Math.max(MIN_W, promotedResize.startWidth + dx)
+          let newH = Math.max(MIN_H, promotedResize.startHeight + dy)
+          const kids = getChildren(cardsRef.current, pending.cardId)
+          if (kids.length > 0) {
+            let maxRight = 0
+            let maxBottom = 0
+            for (const kid of kids) {
+              maxRight = Math.max(maxRight, kid.x + kid.width)
+              maxBottom = Math.max(maxBottom, kid.y + kid.height)
+            }
+            newW = Math.max(newW, maxRight + PADDING)
+            newH = Math.max(newH, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+          }
+          setCards((prev) => {
+            const updated = new Map(prev)
+            const c = updated.get(pending.cardId)
+            if (!c) return prev
+            updated.set(pending.cardId, { ...c, width: newW, height: newH })
+            if (c.parentId !== null) {
+              return autoResizeParent(updated, c.parentId)
+            }
+            return updated
+          })
+          return
+        }
+
+        // Promote to drag
+        const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+        const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+        const absPos = getAbsolutePosition(cardsRef.current, pending.cardId)
+        setDragState({
+          cardId: pending.cardId,
+          offsetX: canvasX - absPos.x,
+          offsetY: canvasY - absPos.y,
+          nestTargetId: null,
+          absX: absPos.x,
+          absY: absPos.y,
+        })
+        // Fall through: the dragging section below will process the first drag
+        // frame on this same event, using the dragState we just set. But since
+        // setDragState is async, we return here and let the next mousemove
+        // (where dragState is committed) handle the first actual move delta.
+        // This is acceptable for drag -- the ghost appears instantly and the
+        // first pixel of offset is negligible. Resize needs immediate response
+        // because the user sees the card edge moving, which is why we handle
+        // resize inline above.
         return
       }
 
