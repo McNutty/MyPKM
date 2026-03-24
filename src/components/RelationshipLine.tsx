@@ -46,7 +46,6 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
   onSelect,
   onEditStart,
 }) => {
-  const isEditing = editingRelId === rel.id
   const isUnlabeled = rel.action === ''
 
   // Compute edge-to-edge endpoints.
