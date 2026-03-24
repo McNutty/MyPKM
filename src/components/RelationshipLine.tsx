@@ -13,10 +13,15 @@
  *
  * Curve geometry:
  *   The path is a quadratic Bezier: M start Q controlPt end
- *   The control point is the relationship card's canvas position.
- *   When the card is at the computed midpoint (no user offset), the curve
- *   degenerates to a straight line because the control point lies exactly
- *   on the line between start and end.
+ *   For a quadratic Bezier, the point on the curve at t=0.5 is:
+ *     P(0.5) = 0.25*start + 0.5*Q + 0.25*end
+ *   We want the curve to pass through the card center at t=0.5, so we solve
+ *   for Q given the desired midpoint (cardPos):
+ *     Q = 2*cardPos - 0.5*start - 0.5*end
+ *   This keeps the label visually on the arrow rather than floating above it.
+ *   When the card is at the computed midpoint (no user offset), the Bezier
+ *   control point lies on the line between start and end and the curve is
+ *   a straight line, as expected.
  *
  * A wide transparent hit-area path (12px) sits behind the visible path to
  * make clicking the curve easy without requiring pixel-perfect aim.
@@ -91,10 +96,14 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
     { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height }
   )
 
-  // The relationship card position is the quadratic Bezier control point.
-  // SVG quadratic Bezier: M start Q control end
-  // When control == midpoint of start..end, the curve is a straight line.
-  const pathD = `M ${start.x} ${start.y} Q ${cardX} ${cardY} ${end.x} ${end.y}`
+  // Compute the Bezier control point such that the curve passes through the
+  // card center at t=0.5. For a quadratic Bezier, P(0.5) = 0.25*start +
+  // 0.5*Q + 0.25*end. Solving for Q given the desired curve point (cardX, cardY):
+  //   Q = 2*(cardX,cardY) - 0.5*start - 0.5*end
+  // This keeps the label sitting on the arrow, not floating above it.
+  const ctrlX = 2 * cardX - 0.5 * start.x - 0.5 * end.x
+  const ctrlY = 2 * cardY - 0.5 * start.y - 0.5 * end.y
+  const pathD = `M ${start.x} ${start.y} Q ${ctrlX} ${ctrlY} ${end.x} ${end.y}`
 
   // Visual style
   const stroke = isSelected ? '#1976d2' : isUnlabeled ? '#aaa' : '#666'

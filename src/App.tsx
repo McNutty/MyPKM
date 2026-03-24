@@ -33,6 +33,7 @@ import {
   updateDescendantDepths,
   normalizeChildPositions,
   computeStackedPosition,
+  computeEdgePoint,
   PADDING,
   BOTTOM_PADDING,
   HEADER_HEIGHT,
@@ -343,15 +344,47 @@ export default function App() {
       const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
       const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
 
-      // Get the card's current canvas position (or 0,0 as fallback -- the
-      // first drag will snap the card to exactly where the cursor is, which
-      // is fine because the cursor is already on the card).
-      const currentPos = relCardPositionsRef.current.get(relId) ?? { x: canvasX, y: canvasY }
+      // Resolve the card's actual visual position. A stored position of (0, 0)
+      // means the card has never been dragged -- RelationshipOverlay uses the
+      // computed edge-to-edge midpoint as the fallback, so we must match that
+      // logic here. Using (0, 0) as the card position would make the drag offset
+      // equal to the full canvas coordinate of the cursor, causing the card to
+      // fly to the upper-left on the first drag frame.
+      const stored = relCardPositionsRef.current.get(relId)
+      let visualX: number
+      let visualY: number
+      if (stored && (stored.x !== 0 || stored.y !== 0)) {
+        visualX = stored.x
+        visualY = stored.y
+      } else {
+        // Recompute the same midpoint that RelationshipOverlay shows as the default.
+        const rel = relationshipsRef.current.find((r) => r.id === relId)
+        if (rel) {
+          const srcCard = cardsRef.current.get(rel.sourceId)
+          const tgtCard = cardsRef.current.get(rel.targetId)
+          if (srcCard && tgtCard) {
+            const srcAbs = getAbsolutePosition(cardsRef.current, rel.sourceId)
+            const tgtAbs = getAbsolutePosition(cardsRef.current, rel.targetId)
+            const srcCenter = { x: srcAbs.x + srcCard.width / 2, y: srcAbs.y + srcCard.height / 2 }
+            const tgtCenter = { x: tgtAbs.x + tgtCard.width / 2, y: tgtAbs.y + tgtCard.height / 2 }
+            const edgeStart = computeEdgePoint(srcCenter, tgtCenter, { x: srcAbs.x, y: srcAbs.y, w: srcCard.width, h: srcCard.height })
+            const edgeEnd = computeEdgePoint(tgtCenter, srcCenter, { x: tgtAbs.x, y: tgtAbs.y, w: tgtCard.width, h: tgtCard.height })
+            visualX = (edgeStart.x + edgeEnd.x) / 2
+            visualY = (edgeStart.y + edgeEnd.y) / 2
+          } else {
+            visualX = canvasX
+            visualY = canvasY
+          }
+        } else {
+          visualX = canvasX
+          visualY = canvasY
+        }
+      }
 
       // Store offset from card center to mouse so the card doesn't jump on drag
       setRelCardDragOffset({
-        x: canvasX - currentPos.x,
-        y: canvasY - currentPos.y,
+        x: canvasX - visualX,
+        y: canvasY - visualY,
       })
       setDraggingRelCardId(relId)
       // Clear card/rel selection while dragging
