@@ -85,6 +85,19 @@ export default function App() {
   const [connectingMousePos, setConnectingMousePos] = useState<{ x: number; y: number } | null>(null)
   const [editingRelId, setEditingRelId] = useState<number | null>(null)
 
+  // M3: Relationship card drag state
+  // relCardPositions: absolute canvas-space position of each relationship card,
+  // keyed by relationship ID. Populated from relationship node layout rows on
+  // load; updated on drag; persisted to DB on mouseup.
+  const [relCardPositions, setRelCardPositions] = useState<Map<number, { x: number; y: number }>>(new Map())
+  const [draggingRelCardId, setDraggingRelCardId] = useState<number | null>(null)
+  // Offset from the card's center to the mouse position at drag-start, in canvas space
+  const [relCardDragOffset, setRelCardDragOffset] = useState<{ x: number; y: number } | null>(null)
+
+  // Keep stable refs for use inside async handlers
+  const relCardPositionsRef = useRef(relCardPositions)
+  useEffect(() => { relCardPositionsRef.current = relCardPositions }, [relCardPositions])
+
   // Keep a stable ref for relationships (needed in async handlers and key listeners)
   const relationshipsRef = useRef(relationships)
   useEffect(() => { relationshipsRef.current = relationships }, [relationships])
@@ -122,17 +135,43 @@ export default function App() {
         ])
         if (cancelled) return
 
-        // Build the flat map first -- depth is unknown until we have all nodes.
+        // Separate card nodes from relationship companion nodes.
+        // Relationship companion nodes (node_type='relationship') carry the
+        // relationship card's position in their layout row but should NOT
+        // appear as regular cards on the canvas.
         const raw = new Map<number, CardData>()
+        const relNodePositions = new Map<number, { nodeId: number; x: number; y: number }>()
+
         for (const node of nodes) {
-          // Pass depth=0 as a placeholder; computeDepths will correct it below.
-          const card = nodeWithLayoutToCardData(node, 0)
-          raw.set(card.id, card)
+          if (node.node_type === 'relationship') {
+            // We'll join this to the relationship by relNodeId after loading rels.
+            relNodePositions.set(node.id, { nodeId: node.id, x: node.x, y: node.y })
+          } else {
+            // Pass depth=0 as a placeholder; computeDepths will correct it below.
+            const card = nodeWithLayoutToCardData(node, 0)
+            raw.set(card.id, card)
+          }
         }
+
         // Task 1: walk the parent chain to assign correct depths to every card.
         const map = computeDepths(raw)
         setCards(map)
         setRelationships(rels)
+
+        // Build relCardPositions: map each rel.id -> its node's canvas position.
+        // A position of (0, 0) means the relationship was just created and the
+        // card hasn't been moved -- RelationshipOverlay will use the computed
+        // midpoint as the fallback.
+        const positions = new Map<number, { x: number; y: number }>()
+        for (const rel of rels) {
+          if (rel.relNodeId !== null) {
+            const nodePos = relNodePositions.get(rel.relNodeId)
+            if (nodePos) {
+              positions.set(rel.id, { x: nodePos.x, y: nodePos.y })
+            }
+          }
+        }
+        setRelCardPositions(positions)
         setError(null)
       } catch (err) {
         if (cancelled) return
@@ -291,6 +330,37 @@ export default function App() {
     []
   )
 
+  // ---------------------------------------------------------------------------
+  // RELATIONSHIP CARD DRAG -- start a drag on a relationship label card
+  // ---------------------------------------------------------------------------
+  const handleRelCardDragStart = useCallback(
+    (relId: number, e: React.MouseEvent) => {
+      e.stopPropagation()
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      // Convert the mousedown screen position to canvas space
+      const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+      const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+
+      // Get the card's current canvas position (or 0,0 as fallback -- the
+      // first drag will snap the card to exactly where the cursor is, which
+      // is fine because the cursor is already on the card).
+      const currentPos = relCardPositionsRef.current.get(relId) ?? { x: canvasX, y: canvasY }
+
+      // Store offset from card center to mouse so the card doesn't jump on drag
+      setRelCardDragOffset({
+        x: canvasX - currentPos.x,
+        y: canvasY - currentPos.y,
+      })
+      setDraggingRelCardId(relId)
+      // Clear card/rel selection while dragging
+      setSelectedId(null)
+      setSelectedRelId(null)
+    },
+    [viewport.panX, viewport.panY, viewport.zoom]
+  )
+
   // (Resize is now detected in handleMouseMove during pendingDrag promotion)
 
   // ---------------------------------------------------------------------------
@@ -399,6 +469,20 @@ export default function App() {
         // first pixel of offset is negligible. Resize needs immediate response
         // because the user sees the card edge moving, which is why we handle
         // resize inline above.
+        return
+      }
+
+      // --- RELATIONSHIP CARD DRAG ---
+      if (draggingRelCardId !== null && relCardDragOffset) {
+        const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+        const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+        const newX = canvasX - relCardDragOffset.x
+        const newY = canvasY - relCardDragOffset.y
+        setRelCardPositions((prev) => {
+          const next = new Map(prev)
+          next.set(draggingRelCardId, { x: newX, y: newY })
+          return next
+        })
         return
       }
 
@@ -568,7 +652,7 @@ export default function App() {
         return updated
       })
     },
-    [dragState, resizeState, isPanning, connectingState, viewport]
+    [dragState, resizeState, isPanning, connectingState, draggingRelCardId, relCardDragOffset, viewport]
   )
 
   // ---------------------------------------------------------------------------
@@ -580,6 +664,32 @@ export default function App() {
     // in the DOM, selection already happened in Card's handleMouseDown, and
     // the resize handle is now visible for a selected card.
     pendingDragRef.current = null
+
+    // --- RELATIONSHIP CARD DRAG END -- persist position ---
+    if (draggingRelCardId !== null) {
+      const relId = draggingRelCardId
+      setDraggingRelCardId(null)
+      setRelCardDragOffset(null)
+
+      // Find the relationship to get its relNodeId for DB persistence
+      const rel = relationshipsRef.current.find((r) => r.id === relId)
+      if (rel && rel.relNodeId !== null) {
+        const pos = relCardPositionsRef.current.get(relId)
+        if (pos) {
+          // Persist the relationship card position using the rel node's layout row.
+          // We store x,y as the absolute canvas position. Width/height stay at
+          // 80x28 -- the same values the Rust backend sets on create_relationship.
+          // The layout table requires width > 0 and height > 0.
+          try {
+            await db.updateNodeLayout(rel.relNodeId, 1, pos.x, pos.y, 80, 28, null, null)
+          } catch (err) {
+            console.error('[App] Failed to persist relationship card position:', err)
+            setError('Failed to save relationship card position.')
+          }
+        }
+      }
+      return
+    }
 
     // --- CONNECTION DRAW COMPLETE ---
     if (connectingState) {
@@ -615,6 +725,13 @@ export default function App() {
       try {
         const rel = await db.createRelationship(sourceId, targetId, '', 1)
         setRelationships((prev) => [...prev, rel])
+        // Register the new rel with position (0,0) -- RelationshipOverlay falls
+        // back to the computed midpoint when x===0 && y===0.
+        setRelCardPositions((prev) => {
+          const next = new Map(prev)
+          next.set(rel.id, { x: 0, y: 0 })
+          return next
+        })
         setSelectedRelId(rel.id)
         // Immediately open label editor so user can name the relationship
         setEditingRelId(rel.id)
@@ -954,7 +1071,7 @@ export default function App() {
         setError('Failed to save position.')
       }
     }
-  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos])
+  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, draggingRelCardId, relCardDragOffset])
 
   // ---------------------------------------------------------------------------
   // CREATE NEW CARD (double-click on empty canvas)
@@ -1163,7 +1280,9 @@ export default function App() {
       if (e.key === 'Delete') {
         const id = selectedRelId
         const relsBefore = [...relationshipsRef.current]
+        const posBefore = new Map(relCardPositionsRef.current)
         setRelationships((prev) => prev.filter((r) => r.id !== id))
+        setRelCardPositions((prev) => { const next = new Map(prev); next.delete(id); return next })
         setSelectedRelId(null)
         setEditingRelId(null)
         try {
@@ -1173,6 +1292,7 @@ export default function App() {
           console.error('[App] Failed to delete relationship:', err)
           setError(`Failed to delete relationship: ${err}`)
           setRelationships(relsBefore)
+          setRelCardPositions(posBefore)
           setSelectedRelId(id)
         }
       } else if (e.key === 'f' || e.key === 'F') {
@@ -1381,7 +1501,7 @@ export default function App() {
           flex: 1,
           overflow: 'hidden',
           backgroundColor: '#f5f5f5',
-          cursor: isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default',
+          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : 'default',
           position: 'relative',
         }}
         onWheel={handleWheel}
@@ -1446,12 +1566,14 @@ export default function App() {
           <RelationshipOverlay
             relationships={relationships}
             cards={cards}
+            relCardPositions={relCardPositions}
             selectedRelId={selectedRelId}
             editingRelId={editingRelId}
             onSelectRel={handleSelectRel}
             onLabelCommit={handleRelLabelCommit}
             onEditStart={setEditingRelId}
             onEditCancel={() => setEditingRelId(null)}
+            onRelCardDragStart={handleRelCardDragStart}
             connectingSource={connectingState ? { x: connectingState.startX, y: connectingState.startY } : null}
             connectingMouse={connectingMousePos}
           />

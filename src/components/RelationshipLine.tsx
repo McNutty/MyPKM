@@ -2,20 +2,27 @@
  * RelationshipLine -- renders a single directed relationship between two cards.
  *
  * Receives absolute canvas-space positions for both cards and draws an SVG
- * line from the source card's edge to the target card's edge, with an
- * arrowhead at the target end and an action label at the midpoint.
+ * quadratic Bezier curve from the source card's edge through the relationship
+ * card's position to the target card's edge, with an arrowhead at the target
+ * end and an action label card at the curve's midpoint (or user-dragged position).
  *
  * Visual states:
  *   Normal:     solid gray (#666), thin line
  *   Selected:   blue (#1976d2), slightly thicker
  *   Unlabeled:  dashed, faded (#aaa), italic "unlabeled" placeholder
  *
- * A wide transparent hit-area stroke (12px) sits behind the visible line to
- * make clicking the line easy without requiring pixel-perfect aim.
+ * Curve geometry:
+ *   The path is a quadratic Bezier: M start Q controlPt end
+ *   The control point is the relationship card's canvas position.
+ *   When the card is at the computed midpoint (no user offset), the curve
+ *   degenerates to a straight line because the control point lies exactly
+ *   on the line between start and end.
+ *
+ * A wide transparent hit-area path (12px) sits behind the visible path to
+ * make clicking the curve easy without requiring pixel-perfect aim.
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-// useState/useRef/useEffect used by EditInput; useCallback used by RelationshipLine
 import type { RelationshipData } from '../store/types'
 import { computeEdgePoint } from '../store/canvas-store'
 
@@ -26,10 +33,17 @@ interface CardRect {
   height: number
 }
 
+// ============================================================================
+// RelationshipLine
+// ============================================================================
+
 interface RelationshipLineProps {
   rel: RelationshipData
   sourcePos: CardRect
   targetPos: CardRect
+  /** Absolute canvas-space position of the relationship card (control point) */
+  cardX: number
+  cardY: number
   isSelected: boolean
   /**
    * Whether this line's label is currently being edited.
@@ -45,6 +59,8 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
   rel,
   sourcePos,
   targetPos,
+  cardX,
+  cardY,
   isSelected,
   isEditing,
   onSelect,
@@ -52,7 +68,9 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
 }) => {
   const isUnlabeled = rel.action === ''
 
-  // Compute edge-to-edge endpoints.
+  // Compute edge-to-edge endpoints using the card center -> card center direction.
+  // For a curved line the "direction" we feed to computeEdgePoint should still
+  // aim toward the opposite card's center so the arrowhead exits/enters cleanly.
   const sourceCenter = {
     x: sourcePos.x + sourcePos.width / 2,
     y: sourcePos.y + sourcePos.height / 2,
@@ -73,10 +91,10 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
     { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height }
   )
 
-  const midX = (start.x + end.x) / 2
-  const midY = (start.y + end.y) / 2
-
-  // (angle computed but not used directly -- the SVG marker uses orient="auto")
+  // The relationship card position is the quadratic Bezier control point.
+  // SVG quadratic Bezier: M start Q control end
+  // When control == midpoint of start..end, the curve is a straight line.
+  const pathD = `M ${start.x} ${start.y} Q ${cardX} ${cardY} ${end.x} ${end.y}`
 
   // Visual style
   const stroke = isSelected ? '#1976d2' : isUnlabeled ? '#aaa' : '#666'
@@ -118,13 +136,11 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
       </defs>
 
       {/* Wide transparent hit area for easy clicking.
-          Uses a visible-but-transparent stroke; pointerEvents='stroke' means
-          the hit area fires events even though the SVG parent has none. */}
-      <line
-        x1={start.x}
-        y1={start.y}
-        x2={end.x}
-        y2={end.y}
+          Uses a curved path matching the visible line, with a wide invisible stroke.
+          pointerEvents='stroke' fires events even though the SVG parent has none. */}
+      <path
+        d={pathD}
+        fill="none"
         stroke="rgba(0,0,0,0)"
         strokeWidth={12}
         pointerEvents="stroke"
@@ -133,48 +149,54 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
         onDoubleClick={handleLineDoubleClick}
       />
 
-      {/* Visible line */}
-      <line
-        x1={start.x}
-        y1={start.y}
-        x2={end.x}
-        y2={end.y}
+      {/* Visible curved line */}
+      <path
+        d={pathD}
+        fill="none"
         stroke={stroke}
         strokeWidth={strokeWidth}
         strokeDasharray={strokeDasharray}
         markerEnd={`url(#${arrowId})`}
         style={{ cursor: 'pointer', pointerEvents: 'none' }}
       />
-
     </>
   )
 }
 
+// ============================================================================
+// RelationshipCard
+// ============================================================================
+
 /**
- * RelationshipCard -- the HTML label element that sits on top of the SVG line
- * at its midpoint. Rendered by RelationshipOverlay as a sibling of the SVG,
- * positioned absolutely in the same canvas-transform coordinate space.
+ * RelationshipCard -- the HTML label element that sits on top of the SVG curve
+ * at the user-dragged position (or the computed midpoint when never dragged).
+ * Rendered by RelationshipOverlay as a sibling of the SVG, positioned
+ * absolutely in the same canvas-transform coordinate space.
  *
- * Not draggable or nestable in M3 -- it stays anchored to the midpoint.
+ * Draggable: mousedown starts a drag tracked by App.tsx via onDragStart.
  */
 interface RelationshipCardProps {
   rel: RelationshipData
-  midX: number
-  midY: number
+  /** Absolute canvas-space X of the card center */
+  cardX: number
+  /** Absolute canvas-space Y of the card center */
+  cardY: number
   isSelected: boolean
   isEditing: boolean
   onSelect: (relId: number) => void
   onEditStart: (relId: number) => void
+  onDragStart: (relId: number, e: React.MouseEvent) => void
 }
 
 export const RelationshipCard: React.FC<RelationshipCardProps> = ({
   rel,
-  midX,
-  midY,
+  cardX,
+  cardY,
   isSelected,
   isEditing,
   onSelect,
   onEditStart,
+  onDragStart,
 }) => {
   const isUnlabeled = rel.action === ''
 
@@ -195,6 +217,16 @@ export const RelationshipCard: React.FC<RelationshipCardProps> = ({
     [rel.id, onSelect, onEditStart]
   )
 
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      // Left-button only; right-button is context menu territory
+      if (e.button !== 0) return
+      onDragStart(rel.id, e)
+    },
+    [rel.id, onDragStart]
+  )
+
   // Hide card while the EditInput is active -- the input takes its place.
   if (isEditing) return null
 
@@ -202,11 +234,11 @@ export const RelationshipCard: React.FC<RelationshipCardProps> = ({
     <div
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
-      onMouseDown={(e) => e.stopPropagation()}
+      onMouseDown={handleMouseDown}
       style={{
         position: 'absolute',
-        left: midX,
-        top: midY,
+        left: cardX,
+        top: cardY,
         transform: 'translate(-50%, -50%)',
         // Width is clamped; content wraps if the label is long.
         minWidth: 60,
@@ -223,7 +255,7 @@ export const RelationshipCard: React.FC<RelationshipCardProps> = ({
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
-        cursor: 'pointer',
+        cursor: 'grab',
         userSelect: 'none',
         // Sit above the SVG line (z=1) but below ghosts (z=10000)
         zIndex: 2,
@@ -238,6 +270,10 @@ export const RelationshipCard: React.FC<RelationshipCardProps> = ({
   )
 }
 
+// ============================================================================
+// RelationshipOverlay
+// ============================================================================
+
 /**
  * Overlay component -- wraps all RelationshipLine instances in a single SVG
  * that spans the full canvas-transform space. Rendered inside the canvas
@@ -251,12 +287,15 @@ export const RelationshipCard: React.FC<RelationshipCardProps> = ({
 interface RelationshipOverlayProps {
   relationships: RelationshipData[]
   cards: Map<number, import('../store/types').CardData>
+  /** Absolute canvas-space position for each relationship card, keyed by rel.id */
+  relCardPositions: Map<number, { x: number; y: number }>
   selectedRelId: number | null
   editingRelId: number | null
   onSelectRel: (relId: number) => void
   onLabelCommit: (relId: number, action: string) => void
   onEditStart: (relId: number) => void
   onEditCancel: () => void
+  onRelCardDragStart: (relId: number, e: React.MouseEvent) => void
   // In-progress connection draw
   connectingSource?: { x: number; y: number } | null
   connectingMouse?: { x: number; y: number } | null
@@ -267,12 +306,14 @@ import { getAbsolutePosition } from '../store/canvas-store'
 export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
   relationships,
   cards,
+  relCardPositions,
   selectedRelId,
   editingRelId,
   onSelectRel,
   onLabelCommit,
   onEditStart,
   onEditCancel,
+  onRelCardDragStart,
   connectingSource,
   connectingMouse,
 }) => {
@@ -283,8 +324,9 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
     rel: RelationshipData
     sourcePos: CardRect
     targetPos: CardRect
-    midX: number
-    midY: number
+    /** Absolute canvas position of the relationship card / Bezier control point */
+    cardX: number
+    cardY: number
   }
 
   const lines: LineData[] = []
@@ -299,19 +341,21 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
     const sourcePos: CardRect = { x: srcAbs.x, y: srcAbs.y, width: srcCard.width, height: srcCard.height }
     const targetPos: CardRect = { x: tgtAbs.x, y: tgtAbs.y, width: tgtCard.width, height: tgtCard.height }
 
-    // Precompute midpoint for the edit input positioning
+    // Compute the geometric midpoint of the edge-to-edge line as the default
+    // relationship card position (falls back to this when no user offset exists).
     const srcCenter = { x: srcAbs.x + srcCard.width / 2, y: srcAbs.y + srcCard.height / 2 }
     const tgtCenter = { x: tgtAbs.x + tgtCard.width / 2, y: tgtAbs.y + tgtCard.height / 2 }
     const start = computeEdgePoint(srcCenter, tgtCenter, { x: sourcePos.x, y: sourcePos.y, w: sourcePos.width, h: sourcePos.height })
     const end = computeEdgePoint(tgtCenter, srcCenter, { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height })
+    const defaultMidX = (start.x + end.x) / 2
+    const defaultMidY = (start.y + end.y) / 2
 
-    lines.push({
-      rel,
-      sourcePos,
-      targetPos,
-      midX: (start.x + end.x) / 2,
-      midY: (start.y + end.y) / 2,
-    })
+    // Use stored position if available and non-zero; otherwise fall back to midpoint.
+    const stored = relCardPositions.get(rel.id)
+    const cardX = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.x : defaultMidX
+    const cardY = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.y : defaultMidY
+
+    lines.push({ rel, sourcePos, targetPos, cardX, cardY })
   }
 
   // Find the line being edited so we can render the input overlay
@@ -330,19 +374,19 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
           // compute a tight bounding box from all card positions.
           width: 32000,
           height: 32000,
-          // Offset so the origin matches the canvas coordinate system even when
-          // large negative coordinates are used (shift by 8000px in each direction).
           overflow: 'visible',
           pointerEvents: 'none', // Cards underneath remain interactive
           zIndex: 1,             // Above cards' z=depth but below ghosts (z=10000)
         }}
       >
-        {lines.map(({ rel, sourcePos, targetPos }) => (
+        {lines.map(({ rel, sourcePos, targetPos, cardX, cardY }) => (
           <RelationshipLine
             key={rel.id}
             rel={rel}
             sourcePos={sourcePos}
             targetPos={targetPos}
+            cardX={cardX}
+            cardY={cardY}
             isSelected={selectedRelId === rel.id}
             isEditing={editingRelId === rel.id}
             onSelect={onSelectRel}
@@ -375,30 +419,31 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
       </svg>
 
       {/* Relationship label cards -- one HTML div per relationship, positioned
-          at the line midpoint. Rendered outside the SVG so they get proper
-          z-stacking and click/keyboard handling. */}
-      {lines.map(({ rel, midX, midY }) => (
+          at the card position (user-dragged or midpoint). Rendered outside the
+          SVG so they get proper z-stacking and click/keyboard handling. */}
+      {lines.map(({ rel, cardX, cardY }) => (
         <RelationshipCard
           key={rel.id}
           rel={rel}
-          midX={midX}
-          midY={midY}
+          cardX={cardX}
+          cardY={cardY}
           isSelected={selectedRelId === rel.id}
           isEditing={editingRelId === rel.id}
           onSelect={onSelectRel}
           onEditStart={onEditStart}
+          onDragStart={onRelCardDragStart}
         />
       ))}
 
       {/* Inline label editor -- rendered as an HTML element positioned at the
-          line midpoint so it gets proper focus/keyboard handling. The transform
+          card position so it gets proper focus/keyboard handling. The transform
           must match the canvas zoom/pan applied by the parent transform div. */}
       {editingLine && (
         <EditInput
           key={editingLine.rel.id}
           rel={editingLine.rel}
-          midX={editingLine.midX}
-          midY={editingLine.midY}
+          midX={editingLine.cardX}
+          midY={editingLine.cardY}
           onCommit={onLabelCommit}
           onCancel={onEditCancel}
         />
@@ -406,6 +451,10 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
     </>
   )
 }
+
+// ============================================================================
+// EditInput
+// ============================================================================
 
 // Separate component so its own state (editValue) is isolated
 const EditInput: React.FC<{
