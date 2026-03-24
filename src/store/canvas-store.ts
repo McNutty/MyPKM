@@ -349,6 +349,79 @@ export function computeStackedPosition(
 }
 
 /**
+ * Return the absolute canvas-space center point of a card, accounting for the
+ * header height offset that the content area introduces.
+ */
+export function getAbsoluteCenter(
+  cards: Map<number, CardData>,
+  cardId: number
+): { x: number; y: number } {
+  const card = cards.get(cardId)
+  if (!card) return { x: 0, y: 0 }
+  const abs = getAbsolutePosition(cards, cardId)
+  return {
+    x: abs.x + card.width / 2,
+    y: abs.y + card.height / 2,
+  }
+}
+
+/**
+ * Given two centers (source and target), compute where the line from center1
+ * toward center2 intersects the axis-aligned boundary rectangle of the card
+ * at center1. Returns the edge intersection point for clean edge-to-edge lines.
+ *
+ * cardRect is { x, y, w, h } in absolute canvas coordinates (top-left origin).
+ */
+export function computeEdgePoint(
+  center1: { x: number; y: number },
+  center2: { x: number; y: number },
+  cardRect: { x: number; y: number; w: number; h: number }
+): { x: number; y: number } {
+  const dx = center2.x - center1.x
+  const dy = center2.y - center1.y
+
+  // Same-center guard: return center if source === target
+  if (dx === 0 && dy === 0) return { x: center1.x, y: center1.y }
+
+  // Half-dimensions
+  const hw = cardRect.w / 2
+  const hh = cardRect.h / 2
+
+  // Find parametric t where the ray from center1 hits the rectangle edge.
+  // We intersect with all four edges and take the smallest positive t.
+  const candidates: number[] = []
+  if (dx !== 0) {
+    candidates.push((cardRect.x + cardRect.w - center1.x) / dx) // right edge
+    candidates.push((cardRect.x - center1.x) / dx)               // left edge
+  }
+  if (dy !== 0) {
+    candidates.push((cardRect.y + cardRect.h - center1.y) / dy)  // bottom edge
+    candidates.push((cardRect.y - center1.y) / dy)               // top edge
+  }
+
+  // We want the smallest t that is > 0 and places us inside the rectangle bounds.
+  let best = Infinity
+  for (const t of candidates) {
+    if (t <= 0) continue
+    const ix = center1.x + dx * t
+    const iy = center1.y + dy * t
+    // Check the point lies on the rectangle boundary (with tiny epsilon for float safety)
+    const eps = 0.5
+    const onBounds =
+      ix >= cardRect.x - eps && ix <= cardRect.x + cardRect.w + eps &&
+      iy >= cardRect.y - eps && iy <= cardRect.y + cardRect.h + eps
+    if (onBounds && t < best) best = t
+  }
+
+  if (!isFinite(best)) {
+    // Fallback: return center (shouldn't happen for normal cards)
+    return { x: center1.x, y: center1.y }
+  }
+
+  return { x: center1.x + dx * best, y: center1.y + dy * best }
+}
+
+/**
  * Convert a canvas-space position to a position relative to a target parent's
  * content area.
  */

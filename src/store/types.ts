@@ -69,3 +69,24 @@ export interface ResizeState {
   startMouseX: number
   startMouseY: number
 }
+
+export interface RelationshipData {
+  id: number
+  sourceId: number
+  targetId: number
+  action: string
+}
+
+/**
+ * Active state while the user is drawing a new relationship line by dragging
+ * from a connection handle. Tracks where the drag started (source card) and
+ * the current mouse position in canvas coordinates for rendering the
+ * in-progress line.
+ */
+export interface ConnectingState {
+  sourceId: number
+  /** Canvas-space X where the drag started (center of source card edge) */
+  startX: number
+  /** Canvas-space Y where the drag started (center of source card edge) */
+  startY: number
+}

@@ -16,6 +16,17 @@ export interface NodeWithLayout {
   min_height: number | null
 }
 
+/**
+ * A directed relationship between two nodes.
+ * Field names mirror the Rust `RelationshipData` struct (camelCase on the JS side).
+ */
+export interface RelationshipData {
+  id: number
+  sourceId: number
+  targetId: number
+  action: string
+}
+
 export interface DbInterface {
   getMapNodes(mapId: number): Promise<NodeWithLayout[]>
   createNode(mapId: number, content: string, x: number, y: number, width: number, height: number): Promise<number>
@@ -30,4 +41,11 @@ export interface DbInterface {
    */
   updateNodeParent(nodeId: number, newParentId: number | null, mapId: number, x: number, y: number, width: number, height: number, minWidth: number | null, minHeight: number | null): Promise<void>
   deleteNode(nodeId: number): Promise<void>
+
+  // --- Relationship operations (M3) ---
+  createRelationship(sourceId: number, targetId: number, action: string, mapId: number): Promise<RelationshipData>
+  getMapRelationships(mapId: number): Promise<RelationshipData[]>
+  updateRelationship(id: number, action: string): Promise<void>
+  flipRelationship(id: number): Promise<void>
+  deleteRelationship(id: number): Promise<void>
 }

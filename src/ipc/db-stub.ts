@@ -1,9 +1,11 @@
-import type { DbInterface, NodeWithLayout } from './db'
+import type { DbInterface, NodeWithLayout, RelationshipData } from './db'
 
 export class StubDb implements DbInterface {
   private nodes: Map<number, NodeWithLayout> = new Map()
+  private relationships: Map<number, RelationshipData> = new Map()
   private nextNodeId = 1
   private nextLayoutId = 1
+  private nextRelId = 1
 
   async getMapNodes(_mapId: number): Promise<NodeWithLayout[]> {
     // Ignores mapId for simplicity -- single map at M1
@@ -99,5 +101,38 @@ export class StubDb implements DbInterface {
   async deleteNode(nodeId: number): Promise<void> {
     if (!this.nodes.has(nodeId)) throw new Error(`Node ${nodeId} not found`)
     this.nodes.delete(nodeId)
+  }
+
+  async createRelationship(
+    sourceId: number,
+    targetId: number,
+    action: string,
+    _mapId: number
+  ): Promise<RelationshipData> {
+    const id = this.nextRelId++
+    const rel: RelationshipData = { id, sourceId, targetId, action }
+    this.relationships.set(id, rel)
+    return rel
+  }
+
+  async getMapRelationships(_mapId: number): Promise<RelationshipData[]> {
+    return Array.from(this.relationships.values())
+  }
+
+  async updateRelationship(id: number, action: string): Promise<void> {
+    const rel = this.relationships.get(id)
+    if (!rel) throw new Error(`Relationship ${id} not found`)
+    this.relationships.set(id, { ...rel, action })
+  }
+
+  async flipRelationship(id: number): Promise<void> {
+    const rel = this.relationships.get(id)
+    if (!rel) throw new Error(`Relationship ${id} not found`)
+    this.relationships.set(id, { ...rel, sourceId: rel.targetId, targetId: rel.sourceId })
+  }
+
+  async deleteRelationship(id: number): Promise<void> {
+    if (!this.relationships.has(id)) throw new Error(`Relationship ${id} not found`)
+    this.relationships.delete(id)
   }
 }

@@ -1,5 +1,17 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { DbInterface, NodeWithLayout } from './db'
+import type { DbInterface, NodeWithLayout, RelationshipData } from './db'
+
+// Rust returns snake_case; we remap to camelCase to match RelationshipData.
+interface RustRelationship {
+  id: number
+  source_id: number
+  target_id: number
+  action: string
+}
+
+function fromRust(r: RustRelationship): RelationshipData {
+  return { id: r.id, sourceId: r.source_id, targetId: r.target_id, action: r.action }
+}
 
 export class TauriDb implements DbInterface {
   async getMapNodes(mapId: number): Promise<NodeWithLayout[]> {
@@ -52,5 +64,32 @@ export class TauriDb implements DbInterface {
 
   async deleteNode(nodeId: number): Promise<void> {
     return invoke('delete_node', { nodeId })
+  }
+
+  async createRelationship(
+    sourceId: number,
+    targetId: number,
+    action: string,
+    mapId: number
+  ): Promise<RelationshipData> {
+    const r = await invoke<RustRelationship>('create_relationship', { sourceId, targetId, action, mapId })
+    return fromRust(r)
+  }
+
+  async getMapRelationships(mapId: number): Promise<RelationshipData[]> {
+    const rows = await invoke<RustRelationship[]>('get_map_relationships', { mapId })
+    return rows.map(fromRust)
+  }
+
+  async updateRelationship(id: number, action: string): Promise<void> {
+    return invoke('update_relationship', { id, action })
+  }
+
+  async flipRelationship(id: number): Promise<void> {
+    return invoke('flip_relationship', { id })
+  }
+
+  async deleteRelationship(id: number): Promise<void> {
+    return invoke('delete_relationship', { id })
   }
 }

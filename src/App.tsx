@@ -19,9 +19,10 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react'
-import type { CardData, CanvasViewport, DragState, ResizeState } from './store/types'
+import type { CardData, CanvasViewport, DragState, ResizeState, RelationshipData, ConnectingState } from './store/types'
 import {
   getAbsolutePosition,
+  getAbsoluteCenter,
   canvasToLocal,
   isAncestor,
   autoResizeParent,
@@ -39,6 +40,7 @@ import {
   MIN_H,
 } from './store/canvas-store'
 import { Card } from './components/Card'
+import { RelationshipOverlay } from './components/RelationshipLine'
 import { db } from './ipc'
 
 // ============================================================================
@@ -75,6 +77,18 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // M3: Relationships
+  const [relationships, setRelationships] = useState<RelationshipData[]>([])
+  const [selectedRelId, setSelectedRelId] = useState<number | null>(null)
+  const [connectingState, setConnectingState] = useState<ConnectingState | null>(null)
+  // Current mouse position in canvas coordinates, tracked during connection draw
+  const [connectingMousePos, setConnectingMousePos] = useState<{ x: number; y: number } | null>(null)
+  const [editingRelId, setEditingRelId] = useState<number | null>(null)
+
+  // Keep a stable ref for relationships (needed in async handlers and key listeners)
+  const relationshipsRef = useRef(relationships)
+  useEffect(() => { relationshipsRef.current = relationships }, [relationships])
+
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const canvasRef = useRef<HTMLDivElement>(null)
 
@@ -102,7 +116,10 @@ export default function App() {
 
     async function loadCards() {
       try {
-        const nodes = await db.getMapNodes(1)
+        const [nodes, rels] = await Promise.all([
+          db.getMapNodes(1),
+          db.getMapRelationships(1),
+        ])
         if (cancelled) return
 
         // Build the flat map first -- depth is unknown until we have all nodes.
@@ -115,6 +132,7 @@ export default function App() {
         // Task 1: walk the parent chain to assign correct depths to every card.
         const map = computeDepths(raw)
         setCards(map)
+        setRelationships(rels)
         setError(null)
       } catch (err) {
         if (cancelled) return
@@ -203,6 +221,8 @@ export default function App() {
       if (isCanvas || e.button === 1) {
         // Left click on empty canvas or middle-mouse: start panning
         setSelectedId(null)
+        setSelectedRelId(null)
+        setEditingRelId(null)
         setIsPanning(true)
         panStartRef.current = {
           x: e.clientX,
@@ -248,6 +268,25 @@ export default function App() {
         startClientY: e.clientY,
         cardRect,
       }
+    },
+    []
+  )
+
+  // ---------------------------------------------------------------------------
+  // CONNECTION DRAW -- start, track, and complete a relationship drag
+  // ---------------------------------------------------------------------------
+  const handleConnectStart = useCallback(
+    (cardId: number, e: React.MouseEvent) => {
+      e.stopPropagation()
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      // Start the line from the center of the source card
+      const center = getAbsoluteCenter(cardsRef.current, cardId)
+      setConnectingState({ sourceId: cardId, startX: center.x, startY: center.y })
+      setConnectingMousePos(center) // start at center, will track to cursor immediately
+      // Clear any active card/rel selection so the canvas is in a clean state
+      setSelectedId(null)
+      setSelectedRelId(null)
     },
     []
   )
@@ -360,6 +399,14 @@ export default function App() {
         // first pixel of offset is negligible. Resize needs immediate response
         // because the user sees the card edge moving, which is why we handle
         // resize inline above.
+        return
+      }
+
+      // --- CONNECTION DRAW ---
+      if (connectingState) {
+        const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+        const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+        setConnectingMousePos({ x: canvasX, y: canvasY })
         return
       }
 
@@ -521,7 +568,7 @@ export default function App() {
         return updated
       })
     },
-    [dragState, resizeState, isPanning, viewport]
+    [dragState, resizeState, isPanning, connectingState, viewport]
   )
 
   // ---------------------------------------------------------------------------
@@ -533,6 +580,51 @@ export default function App() {
     // in the DOM, selection already happened in Card's handleMouseDown, and
     // the resize handle is now visible for a selected card.
     pendingDragRef.current = null
+
+    // --- CONNECTION DRAW COMPLETE ---
+    if (connectingState) {
+      const { sourceId } = connectingState
+      const mousePos = connectingMousePos
+      setConnectingState(null)
+      setConnectingMousePos(null)
+
+      if (!mousePos) return
+
+      // Find the topmost card under the current mouse position (canvas coords),
+      // excluding the source card itself.
+      let targetId: number | null = null
+      let bestArea = Infinity
+      for (const [id, candidate] of cardsRef.current) {
+        if (id === sourceId) continue
+        const absPos = getAbsolutePosition(cardsRef.current, id)
+        const area = candidate.width * candidate.height
+        if (
+          mousePos.x >= absPos.x &&
+          mousePos.x <= absPos.x + candidate.width &&
+          mousePos.y >= absPos.y &&
+          mousePos.y <= absPos.y + candidate.height &&
+          area < bestArea
+        ) {
+          targetId = id
+          bestArea = area
+        }
+      }
+
+      if (targetId === null) return // Released on empty canvas -- cancel
+
+      try {
+        const rel = await db.createRelationship(sourceId, targetId, '', 1)
+        setRelationships((prev) => [...prev, rel])
+        setSelectedRelId(rel.id)
+        // Immediately open label editor so user can name the relationship
+        setEditingRelId(rel.id)
+        setError(null)
+      } catch (err) {
+        console.error('[App] Failed to create relationship:', err)
+        setError(`Failed to create relationship: ${err}`)
+      }
+      return
+    }
 
     if (isPanning) {
       setIsPanning(false)
@@ -862,7 +954,7 @@ export default function App() {
         setError('Failed to save position.')
       }
     }
-  }, [dragState, isPanning, resizeState])
+  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos])
 
   // ---------------------------------------------------------------------------
   // CREATE NEW CARD (double-click on empty canvas)
@@ -1062,8 +1154,94 @@ export default function App() {
   }, [selectedId])
 
   // ---------------------------------------------------------------------------
+  // RELATIONSHIP KEYBOARD ACTIONS (Delete, F to flip, Escape)
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (selectedRelId === null) return
+
+      if (e.key === 'Delete') {
+        const id = selectedRelId
+        const relsBefore = [...relationshipsRef.current]
+        setRelationships((prev) => prev.filter((r) => r.id !== id))
+        setSelectedRelId(null)
+        setEditingRelId(null)
+        try {
+          await db.deleteRelationship(id)
+          setError(null)
+        } catch (err) {
+          console.error('[App] Failed to delete relationship:', err)
+          setError(`Failed to delete relationship: ${err}`)
+          setRelationships(relsBefore)
+          setSelectedRelId(id)
+        }
+      } else if (e.key === 'f' || e.key === 'F') {
+        // Flip direction
+        const id = selectedRelId
+        const relsBefore = [...relationshipsRef.current]
+        setRelationships((prev) =>
+          prev.map((r) =>
+            r.id === id ? { ...r, sourceId: r.targetId, targetId: r.sourceId } : r
+          )
+        )
+        try {
+          await db.flipRelationship(id)
+          setError(null)
+        } catch (err) {
+          console.error('[App] Failed to flip relationship:', err)
+          setError(`Failed to flip relationship: ${err}`)
+          setRelationships(relsBefore)
+        }
+      } else if (e.key === 'Escape') {
+        setSelectedRelId(null)
+        setEditingRelId(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedRelId])
+
+  // ---------------------------------------------------------------------------
+  // RELATIONSHIP LABEL COMMIT
+  // ---------------------------------------------------------------------------
+  const handleRelLabelCommit = useCallback(
+    async (relId: number, action: string) => {
+      setEditingRelId(null)
+      const relsBefore = [...relationshipsRef.current]
+      setRelationships((prev) =>
+        prev.map((r) => (r.id === relId ? { ...r, action } : r))
+      )
+      try {
+        await db.updateRelationship(relId, action)
+        setError(null)
+      } catch (err) {
+        console.error('[App] Failed to update relationship label:', err)
+        setError(`Failed to save relationship label: ${err}`)
+        setRelationships(relsBefore)
+      }
+    },
+    []
+  )
+
+  // ---------------------------------------------------------------------------
+  // SELECT RELATIONSHIP (from line click)
+  // ---------------------------------------------------------------------------
+  const handleSelectRel = useCallback((relId: number) => {
+    setSelectedRelId(relId)
+    setSelectedId(null) // Clear card selection
+  }, [])
+
+  // ---------------------------------------------------------------------------
   // RENDER
   // ---------------------------------------------------------------------------
+
+  // Selecting a card clears any active relationship selection
+  const handleSelectCard = useCallback((cardId: number) => {
+    setSelectedId(cardId)
+    setSelectedRelId(null)
+    setEditingRelId(null)
+  }, [])
 
   // Issue 2: compute the single drop target ID for the current drag.
   // Priority: explicit nest target > current parent (only if card is still inside it) > null.
@@ -1261,6 +1439,23 @@ export default function App() {
             transform: `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`,
           }}
         >
+          {/* Relationship SVG overlay -- rendered before cards so lines appear
+              visually behind card content but the SVG hit areas still work.
+              The SVG has pointer-events: none; only the hit-area strokes and
+              text inside it have pointer-events: all. */}
+          <RelationshipOverlay
+            relationships={relationships}
+            cards={cards}
+            selectedRelId={selectedRelId}
+            editingRelId={editingRelId}
+            onSelectRel={handleSelectRel}
+            onLabelCommit={handleRelLabelCommit}
+            onEditStart={setEditingRelId}
+            onEditCancel={() => setEditingRelId(null)}
+            connectingSource={connectingState ? { x: connectingState.startX, y: connectingState.startY } : null}
+            connectingMouse={connectingMousePos}
+          />
+
           {topLevelCards.map((card) => {
             // Fix 1: skip the dragged card in its normal tree position.
             // It will be rendered as a root-level ghost below, escaping all
@@ -1277,11 +1472,13 @@ export default function App() {
                 newCardId={newCardId}
                 dropTargetId={dropTargetId}
                 onDragStart={handleCardDragStart}
-                onSelect={setSelectedId}
+                onSelect={handleSelectCard}
                 onContentChange={handleContentChange}
                 onResetSize={handleResetSize}
                 onAutoFocusConsumed={() => setNewCardId(null)}
                 zoom={viewport.zoom}
+                onConnectStart={handleConnectStart}
+                isConnecting={connectingState !== null}
               />
             )
           })}
@@ -1300,7 +1497,7 @@ export default function App() {
               newCardId={newCardId}
               dropTargetId={dropTargetId}
               onDragStart={handleCardDragStart}
-              onSelect={setSelectedId}
+              onSelect={handleSelectCard}
               onContentChange={handleContentChange}
               onResetSize={handleResetSize}
               onAutoFocusConsumed={() => setNewCardId(null)}
@@ -1326,7 +1523,7 @@ export default function App() {
               pointerEvents: 'none',
             }}
           >
-            {cards.size} card{cards.size !== 1 ? 's' : ''}
+            {cards.size} card{cards.size !== 1 ? 's' : ''}{relationships.length > 0 ? ` · ${relationships.length} relationship${relationships.length !== 1 ? 's' : ''}` : ''}
           </div>
         )}
       </div>

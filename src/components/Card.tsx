@@ -24,6 +24,14 @@ import { getChildren, HEADER_HEIGHT } from '../store/canvas-store'
 
 const RESIZE_EDGE = 16
 
+// Connection handle positions -- one per edge
+const HANDLE_POSITIONS = [
+  { id: 'top',    style: { top: -5,     left: '50%', transform: 'translateX(-50%)' } },
+  { id: 'right',  style: { top: '50%',  right: -5,   transform: 'translateY(-50%)' } },
+  { id: 'bottom', style: { bottom: -5,  left: '50%', transform: 'translateX(-50%)' } },
+  { id: 'left',   style: { top: '50%',  left: -5,    transform: 'translateY(-50%)' } },
+] as const
+
 interface CardProps {
   card: CardData
   allCards: Map<number, CardData>
@@ -39,6 +47,10 @@ interface CardProps {
   onAutoFocusConsumed: () => void
   zoom: number
   ghostZIndex?: number
+  /** Called when the user starts dragging from a connection handle */
+  onConnectStart?: (cardId: number, e: React.MouseEvent) => void
+  /** True while any connection drag is in progress (show drop-target glow) */
+  isConnecting?: boolean
 }
 
 export const Card: React.FC<CardProps> = React.memo(({
@@ -56,11 +68,16 @@ export const Card: React.FC<CardProps> = React.memo(({
   onAutoFocusConsumed,
   zoom,
   ghostZIndex,
+  onConnectStart,
+  isConnecting,
 }) => {
   const children = getChildren(allCards, card.id)
   const isNestTarget = dragState?.nestTargetId === card.id
   const isSelected = selectedId === card.id
   const isDragging = dragState?.cardId === card.id
+
+  // Track whether this card is currently hovered for showing connection handles
+  const [isHovered, setIsHovered] = useState(false)
   // Issue 2: unified drop target -- this card is where the dragged card will land.
   // Either it's the explicit nest target (new parent on title-bar hover) or it's
   // the current parent of the dragged card (card stays here when released).
@@ -169,7 +186,21 @@ export const Card: React.FC<CardProps> = React.memo(({
 
   const handleRootMouseLeave = useCallback(() => {
     setIsInResizeZone(false)
+    setIsHovered(false)
   }, [])
+
+  const handleRootMouseEnter = useCallback(() => {
+    setIsHovered(true)
+  }, [])
+
+  const handleConnectHandleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      e.preventDefault()
+      if (onConnectStart) onConnectStart(card.id, e)
+    },
+    [card.id, onConnectStart]
+  )
 
   // Double-clicking the body area (below the header) resets the card to its
   // default size. stopPropagation prevents the canvas-level double-click from
@@ -221,6 +252,7 @@ export const Card: React.FC<CardProps> = React.memo(({
       onMouseDown={handleMouseDown}
       onMouseMove={handleRootMouseMove}
       onMouseLeave={handleRootMouseLeave}
+      onMouseEnter={handleRootMouseEnter}
     >
       {/* ------------------------------------------------------------------ */}
       {/* Header row -- ALWAYS visible. Contains the card's title/label.      */}
@@ -370,6 +402,49 @@ export const Card: React.FC<CardProps> = React.memo(({
             zIndex: 999,
           }}
         />
+      )}
+
+      {/* Connection drop-target glow -- shown while any connection drag is in
+          progress and this card is hovered (signalling it is a valid target) */}
+      {isConnecting && isHovered && !isDragging && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: -2,
+            borderRadius: 7,
+            border: '2px solid #1976d2',
+            boxShadow: '0 0 0 3px rgba(25,118,210,0.25)',
+            pointerEvents: 'none',
+            zIndex: 1000,
+          }}
+        />
+      )}
+
+      {/* Connection handles -- four small circles at each edge midpoint.
+          Only visible when the card is hovered, no drag or resize is active,
+          and we are not in the middle of an ongoing connection draw. */}
+      {isHovered && !isDragging && !dragState && !isConnecting && onConnectStart && (
+        <>
+          {HANDLE_POSITIONS.map((handle) => (
+            <div
+              key={handle.id}
+              onMouseDown={handleConnectHandleMouseDown}
+              style={{
+                position: 'absolute',
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                backgroundColor: '#1976d2',
+                border: '2px solid #fff',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                cursor: 'crosshair',
+                zIndex: 1001,
+                opacity: 0.85,
+                ...handle.style,
+              }}
+            />
+          ))}
+        </>
       )}
     </div>
   )
