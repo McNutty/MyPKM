@@ -1,40 +1,72 @@
-# Plectica 2.0 -- M3 Kickoff: Perspective Navigation + Systems Completion
+# Plectica 2.0 -- M3 Kickoff: Relationships + Polish
 
 **Author:** Maren (Technical Project Manager), with DSRP theory input from Derek
 **Date:** 2026-03-24
 **Status:** ACTIVE -- authoritative M3 specification
 **Prerequisite:** M2 APPROVED by Derek (2026-03-24). See `docs/m2-derek-review.md`.
-**Derek's full M3 input:** `docs/m3-derek-input.md`
+**Derek's full M3 analysis:** `docs/m3-relationships-derek.md`
+
+---
+
+## Scope Change Notice
+
+This document supersedes the previous M3 kickoff, which scoped M3 as zoom-into-card navigation (Perspective). Derek revised his sequencing recommendation: Relationships (R) should ship before Perspectives (P). The original M3 doc described Relationships as a Phase 2 feature deferred to M4. That sequencing is now reversed.
+
+**Why Derek changed the recommendation:** Without Relationships, Plectica is a hierarchical note-taker -- Systems without connections across system boundaries. R is what makes it a systems thinking tool. Zoom-into-card (Perspectives) is a navigation affordance that builds on an already-functional DSRP canvas; Relationships are structural. Building P before R would be building a navigation feature on top of an incomplete representation.
+
+**Carry-forward items are rebalanced:** CF-2 (delete dialog) and CF-4 (code cleanup) remain in M3 scope. CF-1 (zoom-into-card) moves to M4. CF-3 (conditional header border) is deferred -- it is cosmetically minor and zoom-into-card is no longer in scope to bundle it with.
 
 ---
 
 ## M3 Goal
 
-M3 completes the MVP and makes Plectica 2.0 genuinely usable as a thinking tool.
+M3 adds Relationships (R) to the canvas and closes two carry-forward items from M2.
 
-M2 delivered the structural backbone: any card can contain any other card to arbitrary depth, with full persistence and cycle prevention. The user can now build a System. What M3 adds is the ability to work within that System fluidly -- to navigate into a card as its own canvas at its own scale, to delete a System's parts with deliberate intent, and to close the remaining S-behavior gaps that M2 left deferred.
-
-Relationships (R) are explicitly not in M3 scope. Derek confirmed this. The roadmap's Phase 2 sequencing -- Systems before Relationships -- is theoretically correct and is maintained here. Relationships require a genuinely different data structure (edges, not nodes), a different interaction pattern (drawing vs. dragging), and their own DSRP specification. They ship in M4.
+M2 delivered Distinctions (cards) and Systems (nesting). The user can build a hierarchy. What M3 adds is the ability to draw connections across that hierarchy -- to say "this part of this system acts on that part of that system." That is the core move of systems thinking, and it is what separates Plectica from a nested outline.
 
 By the end of M3:
-- A user can double-click any card to enter it as a first-class canvas, seeing only that card's direct parts rendered at the top level of the new context. Depth coloring resets to be context-relative. The user feels oriented inside the System. They can navigate back out through a clickable breadcrumb.
-- Creating a new card while navigated inside another card correctly produces a child of the entered card, not a top-level card.
-- Deleting a card with parts no longer produces a confusing flash-and-revert. A clear confirmation dialog gives the user meaningful agency over dissolving a System.
-- The breadcrumb is fully navigable: clicking any segment returns the user to that ancestor's canvas.
-- Code debt from M1-M2 (language, cosmetics) is resolved before M4 adds more IPC commands.
+- A user can hover near any card edge, see a connection handle appear, and drag from that handle to any other card to create a directed relationship.
+- The relationship renders as a directed line with an arrowhead. If the relationship has no label it appears visually flagged as incomplete (dashed/faded). Double-clicking the line lets the user add or edit the label.
+- Relationships cross system boundaries freely -- a card inside one subtree can be connected to a card inside a completely different subtree.
+- Moving or reparenting a card does not destroy its relationships. Deleting a card silently removes its relationships (no extra confirmation needed).
+- Relationships survive app reload. They are first-class persisted entities with their own table and stable IDs.
+- The delete confirmation dialog (CF-2) replaces the M2 optimistic-flash-and-revert behavior for cards with parts.
+- Code language cleanup (CF-4) is complete before M4 adds more IPC commands.
 
 ---
 
 ## What Carries Forward from M2
 
-These items were logged by Derek in `docs/m2-derek-review.md` as carry-forward inputs to M3. All four are in scope for M3, with priorities adjusted based on Derek's M3 DSRP analysis.
-
 | CF # | Item | Source | Priority in M3 |
 |---|---|---|---|
-| CF-1 | Zoom-into-card navigation (perspective-taking) | Derek M2 review | Must-have. First-priority deliverable. Derek: "not just a UX convenience -- it is the implementation of perspective-taking." |
-| CF-2 | Subtree delete confirmation dialog | Derek M2 review | Must-have. Required before zoom-into-card ships; interaction frequency increases once users are working inside cards. |
-| CF-3 | Conditional header border on childless cards | Derek M2 review | Should-have. Minor cosmetic; bundle with cleanup pass. Derek: low priority, CF-4 priority is higher. |
-| CF-4 | Language and code cleanup (`[db]` prefixes, `"containers"` in comments) | Derek M2 review | Should-have. Before M4 adds more IPC commands. |
+| CF-2 | Subtree delete confirmation dialog | Derek M2 review | Must-have. Deleting a card with Relationships attached now has two cascades (children + relationships). Pre-flight dialog is more important than ever. |
+| CF-4 | Language and code cleanup (`[db]` prefixes, `"containers"` in comments) | Derek M2 review | Must-have. Before M4 adds more IPC commands. |
+| CF-1 | Zoom-into-card navigation (perspective-taking) | Derek M2 review | **Moved to M4.** Derek revised sequencing: R before P. See Scope Change Notice above. |
+| CF-3 | Conditional header border on childless cards | Derek M2 review | **Deferred.** Minor cosmetic; was bundled with zoom-into-card. Revisit at M4. |
+
+---
+
+## DSRP Hard Constraints (from Derek's Analysis)
+
+These constraints are non-negotiable. Any implementation that violates them is not DSRP-compliant and M3 cannot close until Derek confirms all six hold.
+
+**R-1: Every relationship must have a direction (source -> target).**
+Relationships in DSRP are not symmetric. "A acts on B" is a different claim than "B acts on A." The data model and UI must enforce directionality -- there is no undirected relationship. Arrowheads on the rendered line are not cosmetic; they are semantic.
+
+**R-2: Labels name the action; unlabeled relationships are flagged as incomplete.**
+A relationship without a label is a structurally ambiguous assertion -- the user has said "these two things are connected" but not "how." The system should allow this state (the user may not know the label yet) but must visually flag it as incomplete (dashed line, faded color, or similar). Double-clicking an unlabeled line prompts for a label. The incomplete flag is removed when a label is added.
+
+**R-3: Any two nodes can be connected regardless of their position in the hierarchy.**
+A relationship is not constrained to cards within the same subtree or at the same depth. A card nested three levels deep inside System A can be connected to a top-level card. This is the whole point: Relationships reveal connections that cross system boundaries. The implementation must not artificially restrict which cards can be endpoints.
+
+**R-4: Moving a node (reparenting) must not destroy its relationships.**
+If a user drags a card into a new parent (changing its `parent_id`), its outgoing and incoming relationships must survive. The relationship references the card's stable ID, not its position in the hierarchy. A relationship whose endpoint was reparented is still valid and must continue to render correctly with updated anchor points.
+
+**R-5: Relationships are first-class entities with stable IDs.**
+Relationships must live in their own table with their own primary key. They are not JSON attached to nodes, not inferred from node positions, not ephemeral. A relationship created in one session is available in the next. Its ID is stable across updates (editing the label does not change the ID).
+
+**R-6: Deleting a node cascades to its relationships silently.**
+When a card is deleted, all relationships where it is the source or target are deleted automatically. No additional confirmation is needed beyond the existing card delete (or subtree delete) confirmation. The user chose to delete the card; its connections go with it. This is implemented via `ON DELETE CASCADE` on the `relationships` table foreign keys.
 
 ---
 
@@ -42,82 +74,85 @@ These items were logged by Derek in `docs/m2-derek-review.md` as carry-forward i
 
 ### Must-Have (M3 closes when all of these are done)
 
-**1. Zoom-into-card navigation (CF-1) -- First Priority**
+**1. Relationship drawing**
 
-The user can double-click any card to enter it as its own full-screen canvas. Inside the card's canvas, that card's direct children are rendered as the top-level cards of the new context. Their own children render inside them as nested cards, as normal. The breadcrumb updates to show the navigation path (e.g., `Canvas > Bicycle > Wheels`). Clicking any breadcrumb segment navigates to that ancestor's canvas. Pressing Escape exits to the parent canvas.
+Hover near a card edge reveals small connection handles (dots on the card perimeter). Dragging from a handle initiates a relationship draw. Releasing the drag over another card creates a directed relationship from the source card to the target card. Releasing over empty canvas cancels the draw.
 
-This is the implementation of Perspective (P) in DSRP: the user adopts a card as their point of observation and the view is that card's parts. Derek explicitly confirmed in `m3-derek-input.md` (Section 1) that zoom-into-card is simultaneously a Systems move and a Perspectives move -- "the card that was a part (seen from outside) becomes a whole (seen from inside)." It is not a camera convenience; it is the mechanism by which deep Systems remain usable at depth, and it is the prerequisite for full saved-perspective functionality in Phase 3.
+The draw gesture must be clearly distinct from card drag. Card drag is initiated from the card body (interior). Relationship draw is initiated from the handle dots on the card edge. These should not conflict.
 
-**DSRP constraints governing this feature (from Derek's input, Section 3):**
+**2. Relationship rendering**
 
-**Constraint 1 -- Only the entered card's subtree is visible.**
-When navigating into a card, the visible canvas contains exactly and only that card's direct children as the top-level elements (with their descendants rendered inside them as nested cards). No cards outside the entered card's subtree appear. Siblings of the entered card are not visible. Children of sibling cards are not visible. This is not a filter -- it is a genuine change of perspective point.
+A directed line with an arrowhead renders between the source and target cards. The line:
+- Routes to the nearest edges of each card (auto-route to avoid rendering a line that crosses through a card body where possible, though exact routing can be approximate for M3)
+- Displays the action label on or near the midpoint of the line
+- Shows as dashed/faded when the action label is empty (incomplete state, per R-2)
+- Shows as selected (visually highlighted) when clicked
+- Recomputes anchor points when either endpoint card is moved or resized
 
-**Constraint 2 -- Depth coloring is context-relative, not absolute.**
-When a user navigates into a card at logical depth 3, its children are at logical depth 4 in the global tree. But visually, those children must appear as depth-0 cards -- the "top level" of this context. Depth coloring communicates "how many layers of system boundary separate you from the current whole," relative to the current navigation context, not absolute depth in the global tree. Inside "Wheels," Front Wheel and Rear Wheel display as depth-0. Inside "Front Wheel," Tire and Rim display as depth-0. The logical depth is preserved in the data and available to the breadcrumb; only the visual rendering is context-relative.
+Lines must render correctly when the source and target cards are at different nesting depths, including when one is a top-level card and the other is deeply nested (R-3). This requires computing the absolute canvas position of each card, accounting for any parent card offset.
 
-**Constraint 3 -- The breadcrumb is the Perspective indicator and must be navigable before zoom-into-card ships.**
-The breadcrumb answers the DSRP Perspective question: "What is my current point of observation, and what does it contain?" `Canvas > Bicycle > Wheels` tells the user their point is "Wheels" and they are looking at Wheels' parts. Clicking "Bicycle" shifts the point to Bicycle. Clicking "Canvas" returns to the global view. A display-only breadcrumb with navigate-into functionality but no navigate-out functionality would be a trap. Clickable breadcrumb is not a "should-have" in M3 -- it is required for zoom-into-card to be safe to ship.
+**3. Relationship editing**
 
-**Constraint 4 -- Creating a card while inside a card creates a part of that card.**
-If a user navigates into "Wheels" and double-clicks the canvas to create a new card, that new card's `parent_id` must be the ID of "Wheels," not null. The user is making a Distinction inside a System; the result is a part of that System. The canvas store's card creation logic must be context-aware.
+Clicking a relationship line selects it. When selected:
+- Double-clicking the line (or its label area) opens an inline label editor
+- Pressing Delete removes the relationship (no confirmation needed -- a relationship is a single entity, not a subtree)
+- A "flip direction" action swaps source and target (UI treatment Wren's call -- a button in a small toolbar near the selected line, or a right-click option)
 
-**Constraint 5 -- Cards cannot be accidentally moved out of the entered card via drag.**
-While inside a card, the parent System is not visible. Dragging a child card to the edge of the viewport must not unnest it into the parent System. Unnesting requires either (a) navigating up first, or (b) an explicit "move to parent" action. Accidental unnesting through drag is a DSRP violation: it moves a part out of its System without the user intending a structural change.
+**4. Unlabeled relationship state**
 
-**2. Subtree delete confirmation dialog (CF-2) -- Required before zoom-into-card ships**
+An unlabeled relationship (empty action string) renders as visually distinct from a labeled one -- dashed line, reduced opacity, or similar. The intent is to communicate "this connection exists but is not yet described." The incomplete state is cleared when the user adds a label.
 
-Replace the current optimistic-then-revert delete pattern with a pre-flight check. Before any deletion, the app checks the in-memory card map for children. If the target card has no children, deletion proceeds immediately (current leaf-delete behavior unchanged). If the target card has children, a modal confirmation appears before any state change:
+**5. Cross-boundary relationships**
 
-> "This card contains [N] part[s]. Delete the card and everything inside it?"
-> [Delete all] [Cancel]
+The implementation must support and correctly render relationships between any two cards regardless of nesting depth or parent. No artificial restriction on which cards can be connected (R-3). The anchor point computation must use absolute canvas coordinates for both endpoints.
 
-"Delete all" calls the new cascade delete backend command, then removes the card and all descendants from in-memory state on success. "Cancel" dismisses the modal with no state change.
+**6. Persistence**
 
-Derek's M3 input (Section 4, S-Deferred-4) notes this is higher priority in M3 than it was in M2 because zoom-into-card navigation increases the frequency with which users work inside cards and therefore the frequency with which they may attempt to delete a card they have been actively building. The pre-flight dialog replaces the optimistic-revert flash entirely: the UI does not show any deletion until the user confirms.
+Relationships are loaded on app startup alongside cards. Creating, editing, or deleting a relationship is immediately persisted to the DB. Reload produces the same set of relationships that existed before reload.
 
-**3. Context-sensitive card creation (S-Deferred-3)**
+**7. Delete cascade (R-6)**
 
-Currently, double-clicking the canvas always creates a top-level card (null `parent_id`). With zoom-into-card navigation, this behavior must become context-aware: when the user is navigated inside a card (i.e., `viewRoot` is set), a new card created by double-clicking must receive the entered card's ID as its `parent_id`. This is Constraint 4 above and is tightly coupled to the zoom-into-card implementation -- it cannot ship without this behavior.
+Deleting a card (leaf or subtree) silently removes all relationships where that card is the source or target. This is handled at the DB level via `ON DELETE CASCADE` on the `relationships` table foreign keys. No additional UI is needed -- the relationship lines simply disappear when their endpoint is removed.
 
-**4. Code cleanup (CF-4)**
+**8. Subtree delete confirmation dialog (CF-2)**
 
-A focused cleanup pass before M4 adds more IPC commands:
+Replace the current optimistic-then-revert delete behavior for cards with children. Before any multi-card deletion, a pre-flight check determines whether the target card has children in the in-memory map.
+
+- If no children: deletion proceeds immediately (leaf delete, no dialog -- unchanged from M2).
+- If children: a modal confirmation appears before any state change:
+
+  > "This card contains [N] part[s]. Delete the card and everything inside it?"
+  > [Delete all] [Cancel]
+
+"Delete all" calls the cascade delete backend command, then removes the card and all descendants from in-memory state on success. Relationship lines for all deleted cards disappear automatically (R-6 handles the DB side; the frontend removes them from state on success). "Cancel" dismisses the modal with no state change.
+
+No optimistic removal before confirmation. No flash-and-revert.
+
+**9. Code cleanup (CF-4)**
+
+A focused cleanup pass:
 - Remove `[db]` prefix from user-facing error strings in `commands.rs`
-- Replace "containers" with "parent cards" or "cards with parts" in `types.ts` comments and any other developer-facing comments that carry a container/leaf distinction
+- Replace "containers" with "parent cards" or "cards with parts" in `types.ts` comments and any developer-facing comments
 - Update the stale M1-era comment in `types.ts` line 26
 - Audit all IPC command error strings for plain-English compliance
 
-This is Silas and Wren split: Silas owns Rust error strings; Wren owns TypeScript comments and types.
+Silas owns Rust error strings. Wren owns TypeScript comments and types.
 
-### Should-Have (ship in M3 if scope allows; defer to M4 if they threaten the critical path)
-
-**5. Conditional header border cosmetic fix (CF-3)**
-
-The `borderBottom` on `Card.tsx` that conditionally appears when a card has children is cosmetically minor. Address during the cleanup pass: either make it unconditional or remove it entirely. Wren's call on which looks better. Derek rated this low priority; it can be bundled with any PR touching `Card.tsx`.
-
-**6. Color scheme selection**
-
-The user expressed interest in choosing a color scheme (matching colors rather than individual card colors). Auto-depth-relative colors stay; the user selects from pre-defined palettes. This is aesthetic, not DSRP-semantic -- Derek's input does not raise any DSRP concern about color scheme choice, so this is entirely Wren's domain. Low complexity; directly supports the "minimum arranging, maximum thinking" design principle.
-
-**7. Subtree move verification (S-Deferred-2)**
-
-When a user drags a card with deep descendants into a new parent, the entire subtree moves together. The data model handles this correctly (only the moved card's `parent_id` updates; children retain their existing `parent_id`). But there has been no explicit specification or testing of the visual behavior when dragging a card with a multi-level subtree into a new parent: auto-resize must propagate correctly for the new parent, and coordinate recalculation must handle the case. This belongs in M3 as an explicit test rather than a new implementation -- it is verification of existing behavior at depth.
-
-### Explicitly Deferred to M4 (not in M3 scope)
+### Explicitly Deferred to M4
 
 | Deferred Item | Reason | Target |
 |---|---|---|
-| Relationships (R) -- arrows between cards | Phase 2 feature. Requires its own data model (edges), interaction pattern (drawing), and DSRP specification. Confirmed by Derek: "Compressing Relationships into M3 alongside zoom-into-card navigation would produce a half-built implementation of both." | M4 |
-| Relationships schema scaffolding | Derek explicitly does not recommend pre-encoding structure the user has not yet expressed. No schema scaffolding for R in M3. | M4 |
-| Multi-select and group move | Useful; also needs to work correctly within the zoom-into-card navigation context. Derek notes multi-select nesting has a DSRP question (Q15) that requires its own answer. Build after navigation model is settled. | M4 |
-| Undo/redo | High value; high complexity in Tauri/SQLite architecture. Derek notes undo scope has a DSRP question (Q16 -- within-context vs. global). Needs its own scoping; more valuable after navigation model is settled. | M4 |
-| Map management (create, rename, switch maps) | Needed before v1.0; not needed for MVP validation. | M4 |
-| Performance optimization at scale | Test at 100+ cards; viewport culling. Only urgent if user hits it. | M4 |
-| Saved perspectives (named views, point/view semantics) | Full Register 2 Perspectives implementation. Phase 3 feature. Zoom-into-card (Register 1) is the prerequisite. | Phase 3 |
+| Zoom-into-card navigation (CF-1) | Sequencing change: R before P. Perspectives build on a complete DSRP canvas; Relationships complete the canvas. | M4 |
+| Conditional header border cosmetic (CF-3) | Was bundled with zoom-into-card. Now deferred with it. | M4 |
+| Relationship-as-system (R node that contains parts) | Advanced DSRP construct -- a relationship that is itself a system. Not needed for M3 validation. | M4+ |
+| Bidirectional / reaction labels | One relationship per direction. Two relationships cover bidirectional. Explicit bidirectional type is an elaboration. | M4+ |
+| Self-loops | A card related to itself. Valid in DSRP but edge case. Deferred. | M4+ |
+| Relationship type classification (`rel_type` field) | Naming the type of relationship (causal, structural, etc.). Rich but not needed for basic R. | M4+ |
+| Multi-select and group move | Needs to work with relationship lines. Build after R rendering is stable. | M4+ |
+| Undo/redo | High complexity; needs its own scoping. More valuable after R is stable. | M4+ |
+| Map management | Needed before v1.0; not needed for M3 validation. | M4+ |
+| Saved perspectives / named views | Full Register 2 Perspectives. Phase 3 feature. | Phase 3 |
 | Import/export | Phase 2+ feature. | M5+ |
-
-**Note on undo/redo and multi-select sequencing:** Derek's M3 input (Section 2, M3-B/C) is explicit that undo/redo and multi-select should be worked after the zoom-into-card navigation model is settled, because those interactions need to work correctly within the navigation context. Building undo/redo before the navigation model exists risks rebuilding parts of it when navigation is added. This is the correct sequencing reason for deferring them.
 
 ---
 
@@ -127,152 +162,287 @@ When a user drags a card with deep descendants into a new parent, the entire sub
 
 ---
 
-### Silas -- Backend: Cascade Delete + Code Cleanup
+### Silas -- Backend: Relationships Schema + Commands + Cascade Delete + Cleanup
 
-**Output location:** `src-tauri/src/commands.rs`, `src-tauri/src/main.rs` (or `lib.rs`)
+**Output locations:** `data/dsrp_schema.sql`, `src-tauri/src/db.rs`, `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`
 **Upstream dependencies:** None. Silas can start immediately at M3 kickoff.
-**Downstream:** Wren's delete dialog depends on Silas's cascade command. Wren's zoom-into-card has no Silas dependency.
+**Downstream:** Wren needs the IPC contract (command signatures and return types) before implementing the frontend. Silas delivers before Wren begins relationship work.
 
-**Task 1 -- `delete_node_cascade` IPC command**
+**Task 1 -- `relationships` table**
 
-A new Rust command that deletes a node and all its descendants recursively. This replaces the current `delete_node` (which relies on `ON DELETE RESTRICT`) for the "Delete all" path.
+Add to `data/dsrp_schema.sql`:
 
-Implementation approach:
-1. Collect the full subtree of the target node using the recursive CTE already documented in `dsrp_schema.sql` (ancestor_chain query, inverted for descendants).
-2. Delete all descendant nodes first (leaves before internal nodes), then delete the root node.
-3. The `layout` rows clean up automatically via `ON DELETE CASCADE` on `layout.node_id`.
-4. Wrap everything in a single transaction. If any delete fails, rollback.
-5. Return the count of deleted nodes so the frontend can confirm to the user ("Deleted Wheels and 4 parts").
+```sql
+CREATE TABLE IF NOT EXISTS relationships (
+    id          INTEGER PRIMARY KEY,
+    source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    action      TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    metadata    TEXT    -- JSON for rendering hints (reserved for future use)
+);
+CREATE INDEX IF NOT EXISTS idx_rel_source ON relationships(source_id);
+CREATE INDEX IF NOT EXISTS idx_rel_target ON relationships(target_id);
+```
 
-The existing `delete_node` command should remain for single-node (leaf) deletion, which requires no dialog and no cascade.
+`ON DELETE CASCADE` on both foreign keys implements R-6 silently and correctly.
 
-**Task 2 -- Error string cleanup (CF-4)**
+The schema migration in `db.rs` must be idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`) so it runs safely against an existing database from M1/M2.
 
-Audit all `commands.rs` error returns. Remove `[db]` prefixes. Replace with plain-English sentences. See Derek's M2 review Item 5 on the `[db]` prefix.
+**Task 2 -- IPC commands**
+
+New Rust commands in `commands.rs`:
+
+- `create_relationship(source_id, target_id, action, map_id)` -- creates a relationship, returns the full relationship record including its new ID
+- `get_map_relationships(map_id)` -- returns all relationships for a map (JOIN on source/target node IDs to verify both belong to the map)
+- `update_relationship(id, action)` -- updates the action label; returns updated record
+- `flip_relationship(id)` -- swaps `source_id` and `target_id`; returns updated record
+- `delete_relationship(id)` -- deletes a single relationship by ID; returns deleted count
+
+Add a `RelationshipData` struct (or equivalent) for the return type:
+
+```rust
+pub struct RelationshipData {
+    pub id: i64,
+    pub source_id: i64,
+    pub target_id: i64,
+    pub action: String,
+}
+```
+
+**Task 3 -- `delete_node_cascade` IPC command (CF-2 backend)**
+
+A Rust command that deletes a node and all its descendants in a single transaction:
+
+1. Collect the full subtree of the target node using a recursive CTE (descendants query).
+2. Delete descendant nodes first (leaves before internal nodes), then the root node.
+3. `layout` rows clean up via existing `ON DELETE CASCADE` on `layout.node_id`.
+4. `relationships` rows for all deleted nodes clean up via the new `ON DELETE CASCADE` on `relationships.source_id` / `relationships.target_id`.
+5. Wrap in a single transaction. Rollback on any failure.
+6. Return the count of deleted nodes.
+
+The existing `delete_node` command remains for leaf deletion (no dialog, no cascade needed).
+
+**Task 4 -- Error string cleanup (CF-4 backend)**
+
+Audit all `commands.rs` error returns. Remove `[db]` prefixes. Rewrite as plain-English sentences.
+
+Register all new commands in `lib.rs` alongside existing commands.
 
 **Silas validation checklist:**
-- `delete_node_cascade` deletes the target node and ALL descendants. Verified by checking node count before and after in the DB.
-- Transaction: if any individual delete fails, nothing is deleted.
-- `layout` rows for all deleted nodes are gone (cascade should handle this; verify explicitly).
-- Returns deleted node count to frontend.
-- No `[db]` prefixes remain in user-facing error strings.
-- Registered in `main.rs`/`lib.rs` alongside existing commands.
+- `relationships` table exists after migration. Migration is idempotent (running twice produces no error and no duplicate table/index).
+- `create_relationship` returns a record with a stable ID. Source and target IDs reference existing nodes.
+- `get_map_relationships` returns all relationships for the map. Returns empty array (not error) when no relationships exist.
+- `update_relationship` changes only the `action` field. Returns updated record.
+- `flip_relationship` swaps `source_id` and `target_id`. Source and target are reversed in the DB after the call.
+- `delete_relationship` removes exactly one relationship by ID.
+- Deleting a node via `delete_node` or `delete_node_cascade`: all relationships where that node is source or target are also gone. Verified by querying `relationships` after deletion.
+- `delete_node_cascade` deletes the target node and ALL descendants in a single transaction. Verified by node count before and after. Layout rows and relationship rows for all deleted nodes are gone.
+- Transaction: if any individual delete in the cascade fails, nothing is deleted.
+- No `[db]` prefixes remain in any user-facing error strings.
+- All new commands registered in `lib.rs`.
 
 ---
 
-### Wren -- Frontend: Navigate-Into, Delete Dialog, Cleanup
+### Wren -- Frontend: Relationship UI + Delete Dialog + Cleanup
 
-**Output location:** `src/App.tsx`, `src/components/Card.tsx`, `src/store/canvas-store.ts`, `src/ipc/db.ts`
+**Output locations:** `src/App.tsx`, `src/components/Card.tsx`, `src/components/RelationshipLine.tsx` (new), `src/store/canvas-store.ts`, `src/store/types.ts`, `src/ipc/db.ts`, `src/ipc/db-tauri.ts`, `src/ipc/db-stub.ts`
 **Upstream dependencies:**
-- Navigate-into: no backend dependency. Pure frontend state management.
-- Context-sensitive card creation: no backend dependency. State management extension of navigate-into.
+- Relationship IPC calls: require Silas's commands and confirmed `RelationshipData` type. Wren can build the UI components and state structure before Silas is done, but cannot wire live IPC until commands exist.
 - Delete dialog ("Delete all" path): requires Silas's `delete_node_cascade` command.
-- Code cleanup: no dependencies.
+- Code cleanup: no dependencies. Can begin at kickoff.
 
-**Task 1 -- Zoom-into-card navigation (no Silas dependency) -- Start Immediately**
+**Task 1 -- Types and IPC layer**
 
-Implement a "current viewport context" that limits which cards are rendered and at what depth coloring.
+Add to `src/store/types.ts`:
 
-Approach:
-1. Add a `viewRoot: number | null` state to the canvas store. `null` = top-level canvas (current behavior). A card ID = "we are inside this card's canvas."
-2. When `viewRoot` is set to card X, render only cards whose `parentId === X` as the top-level elements of the canvas. Those cards' own children render inside them as nested cards, exactly as the current nesting renders -- no change to the children's rendering logic. Derek confirmed (Constraint 1): direct children of the entered card are the top-level elements; the subtree below them renders normally within them.
-3. Depth coloring resets to be context-relative (Constraint 2): when inside a navigated context, a card whose `parentId === viewRoot` renders as depth 0, its children as depth 1, and so on. The absolute depth in the global tree is irrelevant to visual rendering. The canvas store should compute display depth relative to `viewRoot`, not relative to the global root.
-4. Double-clicking a card's body (not the resize zone, not the text edit zone) triggers `setViewRoot(card.id)`. The breadcrumb updates.
-5. The breadcrumb is fully clickable (not display-only): each segment calls `setViewRoot` with that ancestor's ID, or `setViewRoot(null)` for "Canvas."
-6. Escape key exits to parent: `setViewRoot(currentViewRoot's parentId)`. If the current `viewRoot` is a top-level card (its `parentId` is null), Escape returns to `viewRoot = null`.
-7. Canvas pan/zoom state resets on each navigation for M3. Per-card viewport memory is M4 scope.
-8. The entered card itself is not rendered as a visible container -- the user is inside it. Only its children are visible.
+```typescript
+interface RelationshipData {
+  id: number
+  sourceId: number
+  targetId: number
+  action: string
+}
+```
 
-**Constraint 5 enforcement:** While navigated inside a card, dragging a child card to the edge of the viewport must not trigger any unnesting behavior. The parent System is not in view. Unnesting via drag while navigated inside requires explicit navigation up first.
+Add to `src/ipc/db.ts` (`DbInterface`):
+- `createRelationship(sourceId, targetId, action, mapId): Promise<RelationshipData>`
+- `getMapRelationships(mapId): Promise<RelationshipData[]>`
+- `updateRelationship(id, action): Promise<RelationshipData>`
+- `flipRelationship(id): Promise<RelationshipData>`
+- `deleteRelationship(id): Promise<number>`
 
-**Task 2 -- Context-sensitive card creation (no backend dependency, tightly coupled to Task 1)**
+Implement in `db-tauri.ts` (live Tauri IPC) and `db-stub.ts` (in-memory stub for dev/testing).
 
-When `viewRoot` is set, double-clicking the canvas to create a new card must use `viewRoot` as the `parent_id` for the new card, not null. The existing card creation logic in App.tsx must read `viewRoot` from the canvas store and pass it as the parent. This ensures DSRP Constraint 4: a Distinction made inside a System is a part of that System.
+Also add `deleteNodeCascade(nodeId: number): Promise<number>` to the interface and both implementations.
 
-Default position for a new card in a navigated context: same approach as top-level card creation (at cursor or default offset from center). Auto-placement to avoid overlap uses the same existing logic.
+**Task 2 -- Canvas store utilities**
 
-**Task 3 -- Subtree delete confirmation dialog (requires Silas's `delete_node_cascade`)**
+Add to `src/store/canvas-store.ts`:
+- `getAbsoluteCenter(cards, cardId)` -- computes the absolute canvas coordinate of the center of a card, accounting for all ancestor offsets. Used to determine relationship line anchor points regardless of nesting depth.
+- `getCardEdgePoint(cards, cardId, direction)` -- returns the absolute canvas coordinate of a specific edge midpoint (top, bottom, left, right) of a card. Used for anchor point routing.
 
-1. In the Delete key handler (`App.tsx` lines 668-713), add a pre-flight check: does the card being deleted have any children in the in-memory map?
-2. If no children: proceed with existing single-node delete. No dialog. No change from M2 behavior.
+These utilities must correctly traverse the card hierarchy to accumulate offsets. A deeply nested card's absolute position is its own x/y plus the sum of all ancestor x/y offsets.
+
+**Task 3 -- Connection handles on Card.tsx**
+
+On hover (when the user is not currently dragging a card), small handle dots appear on the card's four edge midpoints (or corners -- Wren's call on placement). The handles are visible only on hover and only when no drag is in progress.
+
+Dragging from a handle initiates a relationship draw (distinct from the card drag gesture). The interaction is: `mousedown` on handle -> record `connectingFrom: cardId` in App state -> on `mousemove`, render a "ghost" line from the source card's handle to the cursor -> on `mouseup` over a card, create the relationship; on `mouseup` over empty canvas, cancel.
+
+The handle drag must not trigger the card's normal drag behavior.
+
+**Task 4 -- RelationshipLine component (new)**
+
+`src/components/RelationshipLine.tsx` renders a single relationship as an SVG element:
+
+- Directed line (straight for M3; curved routing is M4+) with an arrowhead at the target end
+- Anchor points computed via `getCardEdgePoint` for source and target cards (nearest-edge heuristic for M3 is acceptable)
+- Action label displayed near the midpoint of the line
+- Visual states:
+  - Normal: solid line, full opacity
+  - Incomplete (empty action): dashed line, reduced opacity (per R-2)
+  - Selected: highlighted (thicker stroke, distinct color)
+- Click selects the relationship
+- Double-click on line or label opens inline label editor
+- Delete key (when selected) calls `deleteRelationship`
+- "Flip" action accessible when selected (button near line or keyboard shortcut -- Wren's call)
+
+The SVG layer for relationship lines must render above the card layer so lines are not obscured by cards. Alternatively, render lines in a separate SVG overlay positioned absolutely over the canvas.
+
+Relationship lines must update anchor points when cards are moved or resized. This means `RelationshipLine` reads card positions from the canvas store on every render (reactive to card position changes).
+
+**Task 5 -- App.tsx orchestration**
+
+New state in `App.tsx`:
+- `relationships: RelationshipData[]` -- loaded on mount alongside cards
+- `selectedRelId: number | null` -- currently selected relationship
+- `connectingFrom: number | null` -- card ID being used as draw source (null when not drawing)
+- Ghost line state: source position + cursor position, used while drawing
+
+On mount: call `getMapRelationships` and store results alongside card load.
+
+On relationship create: call `createRelationship`, add result to `relationships` state.
+On relationship update/flip: call respective IPC, update in `relationships` state.
+On relationship delete: call `deleteRelationship`, remove from `relationships` state.
+On card delete (cascade): after `deleteNodeCascade` succeeds, remove the card and all descendants from state AND remove any relationship where `sourceId` or `targetId` is among the deleted card IDs. DB cascade handles the persistence; frontend state must be updated to match.
+
+**Task 6 -- Subtree delete confirmation dialog (CF-2)**
+
+In the Delete key handler in `App.tsx`:
+
+1. Pre-flight check: does the selected card have children in the in-memory card map?
+2. If no children: proceed with existing single-node delete. No dialog. Unchanged from M2.
 3. If children: do NOT optimistically remove from state. Show a modal confirmation:
-   - Message: "This card contains [N] part[s]. Delete the card and everything inside it?"
+   - "This card contains [N] part[s]. Delete the card and everything inside it?"
    - Actions: "Delete all" and "Cancel"
-4. On "Delete all": call `db.deleteNodeCascade(cardId)`. On success, remove the card and all its descendants from in-memory state (walk the in-memory map using `getDescendants`). On error, show the error -- no optimistic change was made, so no revert is needed.
-5. On "Cancel": dismiss the modal. No state change.
+4. On "Delete all": call `deleteNodeCascade(cardId)`. On success, remove the card and all descendants from in-memory card state (walk the in-memory map for all descendants). Also remove any relationship in `relationships` state where source or target is among the deleted IDs. On error, show the error -- no state was changed optimistically, so no revert needed.
+5. On "Cancel": dismiss modal. No state change.
 
-The modal can be a simple inline overlay for M3. No full modal library needed.
+The modal can be a simple inline overlay. No modal library needed for M3.
 
-Add `deleteNodeCascade(nodeId: number): Promise<number>` to `src/ipc/db.ts` (returns deleted count).
+**Task 7 -- Code cleanup (CF-4 frontend)**
 
-**Edge case:** If the user is navigated inside a card and deletes that card's ancestor from another context (not currently possible, but worth noting), the navigation state must be reset to the top-level canvas. Guard: if `viewRoot` is no longer in the card map after any delete, reset to `null`.
-
-**Task 4 -- Code cleanup (CF-3, CF-4 frontend side)**
-
-- `Card.tsx`: evaluate the conditional `borderBottom` on cards with children. Make it unconditional or remove it. Document the decision in a comment.
-- `types.ts`: update the M1-era comment on line 26. Replace "containers" with "parent cards" anywhere in TypeScript comments.
-- Audit any other developer-facing language that implies a container/leaf type distinction.
+- `types.ts`: update M1-era comment on line 26. Replace "containers" with "parent cards" anywhere in TypeScript comments.
+- Audit all developer-facing language in TypeScript files for container/leaf distinction language.
+- No `[db]` prefix should appear in any user-facing string on the frontend side either.
 
 **Wren validation checklist:**
-- Navigate into "Bicycle": only Bicycle's direct parts visible as top-level on the canvas. Breadcrumb shows `Canvas > Bicycle`. Depth coloring: Bicycle's children render as depth 0.
-- Navigate into "Wheels" (from inside Bicycle): only Wheels' direct parts visible. Breadcrumb shows `Canvas > Bicycle > Wheels`. Depth coloring: Wheels' children render as depth 0.
-- Children of children are still visible as nested cards inside their parent cards (e.g., Front Wheel's children are still visible inside Front Wheel when navigated into Wheels).
-- Click "Bicycle" in breadcrumb: returns to Bicycle's canvas. Bicycle's parts visible.
-- Click "Canvas" in breadcrumb: returns to top-level canvas. All root cards visible.
-- Escape from Wheels: returns to Bicycle's canvas.
-- Escape from Bicycle: returns to top-level canvas.
-- Double-click canvas while inside "Wheels": new card is created with `parent_id = Wheels.id`. Verify in DB. New card appears as a part of Wheels.
-- Drag a card inside "Wheels" to the canvas edge: card does not escape into the parent System. Drag is constrained to the current context.
-- Delete leaf card (no parts): no dialog, immediate deletion. Same behavior as M2.
-- Delete card with 3 parts: dialog appears with correct count ("3 parts"). "Cancel" leaves everything intact. "Delete all" removes card and all 3 parts from canvas and DB.
-- After "Delete all," DB has no rows for the deleted card or any of its parts. Layout rows are also gone.
-- No optimistic flash-and-revert: UI does not show any deletion before user confirms.
-- No `[db]` prefix visible in any user-facing error message.
+
+_Relationship drawing:_
+- Hover over a card: connection handles appear on card edges. Handles disappear when not hovering.
+- Drag from a handle to another card: a directed line with arrowhead renders between the two cards.
+- Drag from a handle to empty canvas: no relationship created; draw gesture cancels cleanly.
+- Drag does not conflict with card body drag. Initiating from the card interior still moves the card.
+
+_Relationship rendering:_
+- Source card at depth 0, target card at depth 3 inside a different subtree: line renders correctly between them, crossing the system boundary. No clipping, no incorrect anchor points.
+- Moving a card updates the relationship line anchor points in real time.
+- Resizing a card (via nested cards auto-resize) updates anchor points.
+- Unlabeled relationship renders as dashed/faded. Labeled relationship renders as solid.
+- Selected relationship renders as visually distinct (highlighted).
+
+_Relationship editing:_
+- Click a line: it becomes selected. Click empty canvas: deselects.
+- Double-click a line or its label: inline label editor opens.
+- Edit label and confirm: label updates on line and in DB. Incomplete visual state clears.
+- Delete key on selected relationship: relationship removed from canvas and DB.
+- Flip action: source and target are swapped. Arrowhead flips direction.
+
+_Persistence:_
+- Create several relationships, reload app: all relationships are present with correct labels and directions.
+
+_Reparenting:_
+- Drag a card with an incoming relationship into a new parent: relationship survives, line re-anchors to new position.
+
+_Delete cascade:_
+- Delete a card with an incoming and outgoing relationship: both relationships disappear from canvas. DB has no relationship rows for the deleted card.
+- Delete a card with children and relationships on those children: subtree delete dialog appears. "Delete all" removes cards and all relationships on any of the deleted cards. No orphaned relationship lines remain.
+
+_Delete dialog (CF-2):_
+- Delete leaf card (no parts): no dialog, immediate deletion. Unchanged from M2.
+- Delete card with 3 parts: dialog appears with correct count. "Cancel" leaves everything intact. "Delete all" removes card and all 3 parts from canvas and DB.
+- No optimistic flash-and-revert at any point.
+
+_Code cleanup:_
 - No "containers" in TypeScript type comments.
-- Header border decision documented.
-- Subtree move test: drag a card with 2+ levels of descendants into a new parent. Verify the entire subtree moves, auto-resize propagates correctly on the new parent, and no coordinates are corrupted.
+- No M1-era stale comments in `types.ts`.
+- No `[db]` prefix visible in any user-facing string reachable from the frontend.
 
 ---
 
 ### Derek -- DSRP Compliance Review
 
 **Output location:** `docs/m3-derek-review.md`
-**Upstream dependencies:** Wren's M3 implementation complete and self-verified.
+**Upstream dependencies:** Wren's M3 implementation complete and self-verified against checklist above.
 **Downstream:** M3 is not closed until Derek signs off. M4 cannot begin until M3 is closed.
 
 **What Derek checks in M3:**
 
-1. **Zoom-into-card is faithful perspective-taking.** When the user navigates into a card, is the interaction a correct representation of adopting a perspective (point + view) in the DSRP sense? Derek verifies that the breadcrumb communicates "I am looking from X at Y" in a way that reinforces DSRP rather than just functioning as a navigation convenience.
+1. **R-1 holds: every relationship has a direction.** No undirected relationships are creatable or renderable. Arrowheads are present and semantically accurate.
 
-2. **Depth coloring is genuinely context-relative.** The depth colors reset when navigating into a card. A card at logical depth 4 renders as depth 0 when it is the top-level element of its current navigation context. Derek confirms this is visually correct and does not mislead the user about their position in the global hierarchy (breadcrumb handles that).
+2. **R-2 holds: unlabeled relationships are flagged as incomplete.** The incomplete visual state is clearly distinct from a labeled relationship. A user cannot mistake an unlabeled line for a fully specified relationship.
 
-3. **Context-sensitive card creation is correct.** Creating a card while navigated inside another card produces a part of the entered card. Derek confirms this matches the DSRP principle: a Distinction made inside a System is a part of that System.
+3. **R-3 holds: cross-boundary relationships work.** Derek verifies that a relationship between a deeply nested card and a top-level card in a different subtree renders correctly and is indistinguishable in capability from a relationship between two top-level cards.
 
-4. **No container/leaf distinction has accumulated.** With CF-3 and CF-4 addressed, Derek confirms that no new visual or behavioral distinction between "cards that have parts" and "cards that do not" has been introduced in M3.
+4. **R-4 holds: reparenting does not destroy relationships.** Derek verifies that moving a card to a new parent preserves all its relationships and they re-render correctly.
 
-5. **Delete dialog is DSRP-consistent.** The "Delete all" option dissolves a System and all its parts. Derek confirms the dialog language adequately communicates the gravity of this operation. A user should not accidentally dissolve a System they built.
+5. **R-5 holds: relationships are first-class persisted entities.** Derek confirms the implementation does not use any shortcut that would make relationships ephemeral or positionally-encoded rather than ID-based.
 
-6. **Constraint 5 holds.** Cards cannot be accidentally moved out of the entered card via drag. Derek confirms no accidental system boundary violations are reachable through normal interaction.
+6. **R-6 holds: delete cascade is silent and complete.** Derek verifies that deleting a card (leaf or subtree) removes all associated relationships with no additional confirmation and no orphaned lines.
 
-7. **No Relationships scaffolding crept in.** Derek confirms no pre-encoding of relationship structure was introduced in M3. The schema and data model remain Systems-only.
+7. **Delete dialog is DSRP-consistent.** The "Delete all" dialog adequately communicates that the user is dissolving a System and its parts. No accidental System dissolution.
+
+8. **No container/leaf distinction has accumulated.** CF-4 cleanup confirmed; no new language reintroduces the distinction.
+
+9. **No Perspectives scaffolding crept in.** M3 is a Relationships milestone. Derek confirms no premature zoom-into-card or perspective state was introduced.
 
 ---
 
-## UX Questions for M3
+## UX Decisions (Resolved)
 
-These questions must be answered before implementation begins on the relevant features. Q1-Q9 were answered in M2. Q10-Q16 are new for M3, contributed by Derek in `m3-derek-input.md` (Section 5).
+These decisions were made by the user and are binding for M3 implementation. They are recorded here so Silas and Wren do not need to re-raise them.
 
-| Q# | Question | Who Decides | Blocking What | Status |
-|---|---|---|---|---|
-| Q10 | When navigating into a card, should the transition be animated (cards zoom/fly in) or instantaneous (hard cut)? | Wren (implementation), Derek (DSRP fidelity) | Zoom-into-card implementation | Open -- must resolve before Wren begins Task 1 |
-| Q11 | How should depth coloring work when navigated into a card? Context-relative (children of entered card show as depth-0) or absolute depth colors retained? | Derek (DSRP), Wren (implementation) | Zoom-into-card visual design | **Answered by Derek:** Context-relative. Children of the entered card display as depth-0. See Constraint 2 above. |
-| Q12 | Can a user navigate into a card that has no children? What do they see -- an empty canvas inviting them to add parts, or is navigation blocked on empty cards? | Derek (DSRP), Wren (UX) | Zoom-into-card empty state | Open -- must resolve before Wren begins Task 1 |
-| Q13 | When a user creates a card while inside a navigated context, where does it appear? At the cursor? At a default position? Auto-placed to avoid overlap? | Wren (implementation) | Context-sensitive card creation | Open -- Wren decides; should be consistent with existing card creation behavior |
-| Q14 | The delete dialog (CF-2): should options be "Delete all" / "Cancel" only, or also offer "Move children to parent before deleting"? The latter is more DSRP-respectful but significantly more complex. | Derek (DSRP), Wren (implementation) | Delete dialog design | Open -- recommend "Delete all" / "Cancel" for M3; "Move children to parent" deferred to M4 as it requires its own implementation spec |
-| Q15 | Multi-select nesting: when the user selects multiple cards and drags them into a new parent, do they nest as a group or individually? | Derek (DSRP), Wren (implementation) | Multi-select implementation | Deferred to M4 (multi-select is out of M3 scope) |
-| Q16 | Undo/redo scope: does undo apply only within the current navigation context or globally across the hierarchy? | Wren (implementation), Derek (DSRP) | Undo/redo architecture | Deferred to M4 (undo/redo is out of M3 scope) |
+| Decision | Resolution |
+|---|---|
+| How to draw relationships? | Hover-to-reveal handles on card edges. Drag from handle to target card. |
+| Allow unlabeled relationships? | Yes. Unlabeled relationships are allowed but visually flagged as incomplete (dashed/faded). User can double-click to add label later. |
+| Delete behavior when a card with relationships is deleted? | Cascade silently. No additional confirmation beyond the card delete (or subtree delete) dialog. Relationships go with the card. |
 
-**Q10 and Q12 must be answered before Wren begins zoom-into-card implementation.** Both are blocking the start of Wren Task 1. Larry should collect these answers from Derek and Wren before signaling implementation kickoff.
+## Open UX Questions
+
+These questions are raised by the new scope and must be answered before Wren begins Tasks 3-5. Tasks 1, 2, and 7 can begin without these answers.
+
+| Q# | Question | Who Decides | Blocking What |
+|---|---|---|---|
+| Q17 | When drawing a relationship, how is the "ghost" line visualized while dragging from a handle? Dashed line from source to cursor? Solid with arrowhead tracking cursor? | Wren (implementation) | Task 3 draw gesture |
+| Q18 | Where exactly do handles appear on a card? Edge midpoints (top/bottom/left/right)? Corners? All of the above? | Wren (UX), Derek (DSRP check) | Task 3 handle placement |
+| Q19 | How is "flip direction" exposed when a relationship is selected? Small inline toolbar near the line? Keyboard shortcut only? Right-click context menu? | Wren (implementation) | Task 4 editing UI |
+| Q20 | How does the SVG relationship layer interact with card z-ordering? Lines should appear above card backgrounds but potentially below card text. What z-order is correct? | Wren (implementation) | Task 4 rendering layer |
+| Q21 | Should the anchor point auto-route to the nearest edge of each card (nearest-edge heuristic) or use a fixed edge per relationship (e.g., always right-to-left)? For M3, nearest-edge is recommended; confirm. | Wren (implementation) | Task 4 anchor computation |
+
+Q17-Q21 are implementation decisions Wren can resolve unilaterally or quickly with Derek. They should be answered before Wren begins Task 3. Larry should collect answers and record them in the issue tracker.
 
 ---
 
@@ -280,39 +450,47 @@ These questions must be answered before implementation begins on the relevant fe
 
 ```
 M2 COMPLETE (precondition for all M3 work)
-  zoom-into-card deferred from M2 (Q8 decision)
-  delete-with-children UX acceptable but not ideal (Derek M2 review Item 6)
-  code debt logged (CF-3, CF-4)
-  S-Deferred behaviors logged (Sections 2 and 4 of m3-derek-input.md)
+  zoom-into-card deferred from M2, now moved to M4
+  delete-with-children UX still needs improvement (CF-2)
+  code debt logged (CF-4)
 
-PARALLEL (can start immediately at M3 kickoff)
-  Silas  --> Task 1: Implement delete_node_cascade IPC command
-          --> Task 2: Error string cleanup (CF-4 backend)
+SILAS -- starts immediately at M3 kickoff
+  Task 1: relationships table + migration
+  Task 2: IPC commands (create/get/update/flip/delete relationship)
+  Task 3: delete_node_cascade IPC command
+  Task 4: error string cleanup (CF-4 backend)
+  --> Silas delivers IPC contract to Wren before Wren begins Tasks 3-5
 
-  Wren   --> Task 1: Zoom-into-card navigation (no backend dep)
-               [BLOCKED on Q10 and Q12 answers before beginning]
-          --> Task 2: Context-sensitive card creation (coupled to Task 1)
-          --> Task 4: Code cleanup (CF-3, CF-4 frontend)
+WREN -- can start immediately on some tasks
+  Task 1: types.ts + IPC interface (no Silas dependency -- define interface first)
+  Task 2: canvas-store utilities (no Silas dependency)
+  Task 7: code cleanup (no Silas dependency)
+  [Q17-Q21 must be answered before beginning Tasks 3-5]
+
+WREN -- waits on Silas IPC contract
+  Task 3: connection handles + draw gesture
+  Task 4: RelationshipLine component
+  Task 5: App.tsx orchestration
+  Task 6: delete dialog (also waits on Silas delete_node_cascade)
 
 SEQUENTIAL
+  Silas delivers IPC contract (command signatures + RelationshipData struct)
+    --> Wren Tasks 3, 4, 5 unblocked
   Silas delivers delete_node_cascade
-    --> Wren Task 3: Wire delete dialog to cascade command
-                     Add deleteNodeCascade to db.ts IPC layer
+    --> Wren Task 6 unblocked
 
-  Q10 and Q12 answered (Derek + Wren)
-    --> Wren Task 1 unblocked
+  Q17-Q21 answered
+    --> Wren Tasks 3, 4 unblocked
 
-  Wren Tasks 1 + 2 + 3 + 4 all complete
+  Wren Tasks 1-7 all complete
     --> Wren self-verification against checklist
     --> Derek DSRP compliance review (docs/m3-derek-review.md)
     --> M3 closed
 ```
 
-**Critical path:** Zoom-into-card navigation (Wren Task 1) is the most complex item and has no Silas dependency. It should start immediately after Q10 and Q12 are answered. Context-sensitive card creation (Wren Task 2) is tightly coupled to Task 1 and should be implemented as part of the same workstream, not a separate hand-off.
+**Critical path:** Silas's IPC commands are the upstream dependency for the most complex frontend work. Silas should prioritize delivering the command signatures and `RelationshipData` struct (even before full implementation) so Wren can start building against the interface. The `db-stub.ts` implementation lets Wren develop and test the frontend without a live Rust backend.
 
-**Wren is not fully blocked at kickoff.** Code cleanup (Task 4) can begin immediately. Task 1 and Task 2 wait on Q10 and Q12 answers. The delete dialog (Task 3) waits on Silas's cascade command, but that is not the critical path item.
-
-**Why breadcrumb navigation is not a separate task:** The breadcrumb was wired in M2 to display the ancestor chain. Making it navigable (clickable) is integral to zoom-into-card -- it cannot ship as display-only once navigate-into exists (Derek Constraint 3). It is a sub-task of Wren Task 1, not a separate workstream.
+**Wren is not fully blocked at kickoff.** Tasks 1, 2, and 7 have no upstream dependencies. Q17-Q21 are resolvable quickly. The window between kickoff and Silas's delivery is time for Wren to build the IPC interface and store utilities.
 
 ---
 
@@ -320,73 +498,70 @@ SEQUENTIAL
 
 M3 is complete -- and M4 kickoff may begin -- when ALL of the following are true:
 
-1. **Navigate-into works.** Double-clicking a card enters it as a full-screen canvas. Only that card's direct parts are visible as top-level elements. Their children are visible inside them as nested cards. Depth coloring is context-relative (entered card's children render at depth 0).
+1. **Relationship drawing works.** Hover reveals handles on card edges. Dragging from a handle to another card creates a directed relationship. Dragging to empty canvas cancels.
 
-2. **Navigate-out works.** Clicking a breadcrumb segment returns the user to that ancestor's canvas. Escape exits to parent. Clicking "Canvas" in the breadcrumb returns to the top-level view.
+2. **Relationship rendering is correct.** Directed lines with arrowheads render between source and target. Labels display on the line. Incomplete (unlabeled) relationships are visually distinct (dashed/faded).
 
-3. **Breadcrumb is clickable.** Every segment in the breadcrumb is a navigation action, not just a label.
+3. **Cross-boundary relationships work.** A card nested inside one subtree can be connected to a card in a different subtree. Line renders correctly across the boundary.
 
-4. **Context-sensitive card creation works.** Double-clicking the canvas while inside a navigated card creates a card with the entered card as its parent. Verified in DB.
+4. **Relationship editing works.** Click selects. Double-click edits label. Delete key removes. Flip reverses direction. All changes persist to DB immediately.
 
-5. **Accidental unnesting via drag is blocked.** A child card cannot be dragged outside its System boundary while the user is navigated inside the System.
+5. **Reparenting preserves relationships.** Moving a card to a new parent does not destroy or orphan its relationships. Lines re-anchor to new position.
 
-6. **Delete with parts is non-jarring.** A confirmation dialog appears before any multi-card deletion. No optimistic flash-and-revert. The user makes an explicit choice.
+6. **Persistence is complete.** All relationships survive app reload with correct data and visual state.
 
-7. **"Delete all" cascade works.** The card and all its descendants are removed from the canvas and from the DB in a single transaction. No orphaned rows remain.
+7. **Delete cascade is silent and complete.** Deleting a card (by any path) removes all its relationships from canvas and DB. No orphaned lines, no extra confirmation required.
 
-8. **Leaf delete is unchanged.** Deleting a card with no parts is immediate and requires no dialog. No regression from M2.
+8. **Delete dialog is non-jarring.** For cards with children, a confirmation dialog appears before any state change. No optimistic flash-and-revert. "Delete all" removes card, all descendants, and all their relationships. "Cancel" leaves everything intact.
 
-9. **No raw error strings reach the user.** All IPC error messages are plain English. No `[db]` prefix visible in the UI under any reachable path.
+9. **Leaf delete is unchanged.** Deleting a card with no children is immediate, no dialog. No regression from M2.
 
-10. **Code language is clean.** No "containers" in developer-facing type comments. No M1-era stale comments. Header border decision documented.
+10. **No raw error strings reach the user.** All IPC errors are plain English. No `[db]` prefix in any reachable UI path.
 
-11. **Subtree move works at depth.** Dragging a card with 2+ levels of descendants into a new parent moves the entire subtree correctly. Auto-resize propagates on the new parent. No coordinate corruption.
+11. **Code language is clean.** No "containers" in developer-facing TypeScript comments. No M1-era stale comments.
 
-12. **Derek has signed off.** Derek's M3 DSRP compliance review (`docs/m3-derek-review.md`) is complete with no blocking issues.
+12. **Derek has signed off.** Derek's M3 DSRP compliance review (`docs/m3-derek-review.md`) is complete with no blocking issues. All six R constraints confirmed.
 
 ---
 
-## Risks
+## Risk Register
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| **Q10 or Q12 delays Wren Task 1 start.** If animation decision (Q10) or empty-card navigation decision (Q12) is not answered quickly, Wren cannot begin the most complex task. | Medium | Medium | Larry collects Q10 and Q12 answers from Derek and Wren before signaling kickoff. Wren begins Task 4 (code cleanup) in the interim. |
-| **Context-relative depth coloring is harder than expected.** The canvas store currently computes depth from a global root. Switching to context-relative depth requires reading `viewRoot` during rendering. If the depth computation is tightly coupled to the global tree, a refactor may be needed. | Medium | Medium | Wren investigates the current depth computation path before committing to the approach. If the refactor is large, context-relative coloring can be approximated by resetting depth to 0 for all top-level-in-context cards and incrementing normally from there. |
-| **Navigate-into scope expands unexpectedly.** Zoom-into-card requires a new canvas rendering mode (filter by viewRoot, reset pan/zoom, manage Escape/breadcrumb state). Per-card viewport memory adds complexity. | Medium | Medium | Keep M3 simple: viewRoot filter to direct children, pan/zoom resets on navigation, no per-card viewport memory. Per-card memory is M4 scope. |
-| **Constraint 5 (no accidental unnesting) conflicts with existing drag behavior.** The current drag implementation may not have a natural hook for "canvas boundary = System boundary." Enforcing this may require changes to the drag event handler. | Low | Medium | Wren investigates during Task 1. If drag boundary enforcement is complex, the M3 implementation can simply clip drag positions to a safe zone within the canvas rather than enforcing the boundary at the System level. Full boundary enforcement can be tightened in M4. |
-| **Delete cascade has edge cases with deep trees.** Deleting a card with 4+ levels of descendants is a larger operation than typical M1-M2 operations. Partial deletes would corrupt the map. | Low | High | Silas's validation checklist explicitly covers the "delete cascade and verify no rows remain" test. The recursive CTE approach handles arbitrary depth. SQLite transactions are reliable. |
-| **Breadcrumb navigation state and canvas state get out of sync.** If a card is deleted while the user is navigated into one of its descendants, the breadcrumb may show a stale path. | Medium | Low | Breadcrumb reads directly from the in-memory card map on every render. If `viewRoot` is no longer in the card map after any deletion, auto-reset to `viewRoot = null` (top-level canvas). |
+| **Absolute position computation for cross-boundary lines is harder than expected.** Relationship lines between deeply nested cards require summing all ancestor offsets. If the canvas store does not have a clean utility for this, building it may take longer than estimated. | Medium | Medium | Wren builds and tests `getAbsoluteCenter` / `getCardEdgePoint` as the first deliverable in Task 2. If the utility is complex, Wren flags before beginning Task 4. |
+| **SVG layer z-ordering conflicts with card interaction.** Rendering lines above cards may intercept mouse events intended for cards (hover, drag). Rendering below cards may obscure lines under card bodies. | Medium | Medium | Use pointer-events management on the SVG overlay. Relationship lines should have pointer events enabled (for click-to-select); card bodies should sit above relationship lines in z-order. Wren resolves via Q20 before starting Task 4. |
+| **Draw gesture conflicts with card drag.** Mousedown on a handle dot that is close to the card body edge may ambiguously trigger both card drag and relationship draw. | Medium | Medium | Handle dots are distinct interactive targets with their own event handlers. `stopPropagation` on the handle's mousedown prevents the card drag handler from firing. Wren tests this boundary carefully. |
+| **Q17-Q21 delay Wren Tasks 3-5.** If UX questions are not answered quickly, Wren cannot begin the visual components. | Low | Medium | Questions are Wren-resolvable. Larry collects answers before signaling Wren to begin Task 3. Wren works on Tasks 1, 2, 7 in the interim. |
+| **Delete cascade with relationships has edge cases.** If a subtree delete removes 10 cards, all their relationships must be removed from both DB and frontend state. A partial update would leave orphaned lines. | Low | High | Wren's Task 6 explicitly walks all deleted card IDs and filters them out of `relationships` state after a successful cascade delete. DB side is handled by `ON DELETE CASCADE` -- verify explicitly in Silas's checklist. |
+| **Relationship line anchor points drift when cards resize.** Auto-resize (from adding parts) changes a card's dimensions. Lines anchored to card edges must recompute. If `RelationshipLine` only reads initial positions, lines will drift. | Medium | Medium | `RelationshipLine` must be reactive to card position and size changes in the store. Wren ensures the component re-renders whenever the relevant cards change in `canvas-store`. |
 
 ---
 
 ## Lessons Carried Forward from M2
 
 **Keep:**
-- **Issue tracker as source of truth for bugs.** The pattern (user writes issue -> Larry delegates fix -> Silas/Wren fix -> commit immediately -> move to Handled) was clean and low-overhead. Carry into M3.
-- **Commit immediately after confirmed fix.** No accumulation of uncommitted working changes.
-- **Requirements testing checklist at the bottom of the issue tracker.** Grows organically as features are added. Keep this pattern for M3.
-- **Derek's review gates milestone closure.** Derek's sign-off consistently caught real issues. This gate stays.
+- Issue tracker as source of truth for bugs and polish items.
+- Commit immediately after confirmed fix.
+- Requirements testing checklist at the bottom of the issue tracker.
+- Derek's review gates milestone closure.
+- Parallel workstreams at kickoff (Silas and Wren start concurrently on non-overlapping tasks).
 
 **Improve:**
-- **Derek's DSRP input at kickoff, not mid-implementation.** In M2, some DSRP answers arrived during implementation. For M3, Q10 and Q12 are explicitly flagged as blocking before Wren begins Task 1. The dependency is visible in the sequencing map.
-- **Explicit "must-have" vs. "should-have" labeling.** M3 has more candidates than M2. The MoSCoW split in this document makes scope trade-offs explicit from kickoff.
-
-**No change:**
-- Short parallel workstreams. Silas and Wren starting in parallel at kickoff worked well in M2. Same in M3.
-- Dependency-based sequencing with no timelines. "X before Y," not "week 1 / week 2."
+- **IPC contract first.** In M2, Silas and Wren sometimes worked in sequence unnecessarily. In M3, Silas should deliver the command signatures and `RelationshipData` struct as early as possible -- even before full Rust implementation -- so Wren can build the frontend against the interface using `db-stub.ts`.
+- **UX questions answered before visual tasks begin.** Q17-Q21 are flagged explicitly. Larry collects answers before signaling Wren to begin Tasks 3-5.
 
 ---
 
 ## Reference Documents
 
-- `docs/m3-derek-input.md` -- Derek's full DSRP analysis for M3 (source for all Derek inputs in this document)
-- `docs/m3-kickoff-draft.md` -- Maren's draft with original placeholders (retained for reference)
+- `docs/m3-relationships-derek.md` -- Derek's full DSRP Relationships analysis (source for R-1 through R-6 and all Derek inputs in this document)
 - `docs/m2-derek-review.md` -- Derek's M2 compliance review (source of CF-1 through CF-4)
-- `docs/roadmap.md` -- Living roadmap; M4 scope will be defined at M3 close
+- `docs/roadmap.md` -- Living roadmap; M4 scope (Perspectives / zoom-into-card) will be defined at M3 close
+- `C:\Users\marti\.claude\plans\bubbly-frolicking-plum.md` -- M3 Relationships planning document (scope, files, delegation)
 
 ---
 
-*M3 execution begins when Q10 and Q12 are answered. All other tasks are unblocked at kickoff.*
+*M3 execution begins when Q17-Q21 are answered. Silas starts immediately. Wren starts Tasks 1, 2, and 7 immediately.*
 
 *Questions to Maren.*
 
