@@ -439,18 +439,19 @@ export default function App() {
       // Ancestors (parent, grandparent, etc.) are valid targets -- the user can
       // explicitly drag a card out of a deep nest and drop it onto a grandparent.
       // The key guard against accidental ancestor highlighting: if the cursor is
-      // still inside the current parent's bounds, nest detection is suppressed
-      // entirely (the user is just repositioning within the parent).
+      // still inside the current parent's bounds, the current parent is excluded
+      // as a nest target, but siblings and other cards are still checked.
       if (NESTING_ENABLED) {
         // Use the raw cursor position in canvas space -- not the dragged card's
         // center -- so the user has precise control over which card to target.
         const cursorCanvasX = canvasX
         const cursorCanvasY = canvasY
 
-        // If the cursor is still inside the current parent, suppress all nest
-        // targets. This is the key fix for the grandparent highlight bug: when
-        // repositioning within a parent the grandparent's body contains the
-        // cursor, but the user is not trying to nest into the grandparent.
+        // Determine whether the cursor is still inside the current parent's bounds.
+        // When it is, the current parent is excluded as a nest target (the user is
+        // repositioning within the parent, not trying to re-nest into it). All other
+        // cards -- including siblings -- remain valid candidates. When the cursor has
+        // left the parent's bounds, every card (including the parent) is a valid target.
         let cursorInsideCurrentParent = false
         if (card.parentId !== null) {
           const parentAbs = getAbsolutePosition(cardsRef.current, card.parentId)
@@ -467,26 +468,28 @@ export default function App() {
         let bestTarget: number | null = null
         let bestArea = Infinity
 
-        if (!cursorInsideCurrentParent) {
-          for (const [id, candidate] of cardsRef.current) {
-            if (id === dragState.cardId) continue
-            // Skip descendants of the dragged card (can't nest a parent into its child).
-            if (isAncestor(cardsRef.current, id, dragState.cardId)) continue
+        for (const [id, candidate] of cardsRef.current) {
+          if (id === dragState.cardId) continue
+          // Skip descendants of the dragged card (can't nest a parent into its child).
+          if (isAncestor(cardsRef.current, id, dragState.cardId)) continue
+          // When the cursor is inside the current parent, skip the current parent as
+          // a candidate -- the user is repositioning, not re-nesting. Siblings and
+          // all other cards are still valid targets.
+          if (cursorInsideCurrentParent && id === card.parentId) continue
 
-            const absPos = getAbsolutePosition(cardsRef.current, id)
-            const area = candidate.width * candidate.height
+          const absPos = getAbsolutePosition(cardsRef.current, id)
+          const area = candidate.width * candidate.height
 
-            // Hit zone is the full card bounds -- dropping anywhere on a card nests into it.
-            if (
-              cursorCanvasX >= absPos.x &&
-              cursorCanvasX <= absPos.x + candidate.width &&
-              cursorCanvasY >= absPos.y &&
-              cursorCanvasY <= absPos.y + candidate.height &&
-              area < bestArea
-            ) {
-              bestTarget = id
-              bestArea = area
-            }
+          // Hit zone is the full card bounds -- dropping anywhere on a card nests into it.
+          if (
+            cursorCanvasX >= absPos.x &&
+            cursorCanvasX <= absPos.x + candidate.width &&
+            cursorCanvasY >= absPos.y &&
+            cursorCanvasY <= absPos.y + candidate.height &&
+            area < bestArea
+          ) {
+            bestTarget = id
+            bestArea = area
           }
         }
 
