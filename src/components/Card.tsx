@@ -35,6 +35,7 @@ interface CardProps {
   onDragStart: (cardId: number, e: React.MouseEvent) => void
   onSelect: (cardId: number) => void
   onContentChange: (cardId: number, newContent: string) => void
+  onResetSize: (cardId: number) => void
   onAutoFocusConsumed: () => void
   zoom: number
   ghostZIndex?: number
@@ -51,6 +52,7 @@ export const Card: React.FC<CardProps> = React.memo(({
   onDragStart,
   onSelect,
   onContentChange,
+  onResetSize,
   onAutoFocusConsumed,
   zoom,
   ghostZIndex,
@@ -168,6 +170,17 @@ export const Card: React.FC<CardProps> = React.memo(({
   const handleRootMouseLeave = useCallback(() => {
     setIsInResizeZone(false)
   }, [])
+
+  // Double-clicking the body area (below the header) resets the card to its
+  // default size. stopPropagation prevents the canvas-level double-click from
+  // firing (which would create a new card).
+  const handleBodyDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      onResetSize(card.id)
+    },
+    [card.id, onResetSize]
+  )
 
   const titleFontSize = Math.max(10, Math.min(14, 14 / Math.max(1, card.depth * 0.3 + 0.7)))
 
@@ -290,6 +303,7 @@ export const Card: React.FC<CardProps> = React.memo(({
 
       {/* ------------------------------------------------------------------ */}
       {/* Content area -- children render here as absolutely-positioned cards */}
+      {/* Double-click on the body (not on a child card) resets to default size */}
       {/* ------------------------------------------------------------------ */}
       <div
         style={{
@@ -297,6 +311,7 @@ export const Card: React.FC<CardProps> = React.memo(({
           flex: 1,
           overflow: 'visible',
         }}
+        onDoubleClick={handleBodyDoubleClick}
       >
         {children.map((child) => {
           // Fix 1: suppress the nested instance of the card being dragged.
@@ -317,6 +332,7 @@ export const Card: React.FC<CardProps> = React.memo(({
               onDragStart={onDragStart}
               onSelect={onSelect}
               onContentChange={onContentChange}
+              onResetSize={onResetSize}
               onAutoFocusConsumed={onAutoFocusConsumed}
               zoom={zoom}
             />

@@ -646,13 +646,11 @@ export default function App() {
     }
 
     // --- UNNEST: card dragged outside its current parent ---
-    // Walk the ancestor chain from the immediate parent upward. For each
-    // ancestor, check whether the dragged card's center is outside that
-    // ancestor's bounds. Keep walking until we find an ancestor that still
-    // contains the card -- that ancestor becomes the new parent. If the card
-    // is outside every ancestor, it lands at the canvas root (parentId null).
-    // This handles cards nested more than one level deep: a card at depth 3
-    // can escape all the way to the canvas in a single drag.
+    // If the card's center is outside its immediate parent, unnest it to canvas
+    // root unconditionally. Re-nesting into an ancestor only happens via the
+    // explicit nest-target path above (title-bar hover). This keeps the rule
+    // consistent: you must hover a title bar to nest; leaving a parent always
+    // means going to the canvas root.
     if (!nestTargetId && card.parentId !== null) {
       const absPos = getAbsolutePosition(cardsRef.current, cardId)
       const centerX = absPos.x + card.width / 2
@@ -670,26 +668,11 @@ export default function App() {
           centerY <= immediateParentAbs.y + immediateParent.height
 
         if (!stillInsideImmediate) {
-          // The card left its immediate parent. Walk up the ancestor chain to
-          // find the deepest ancestor that still contains the card's center.
-          let newParentId: number | null = null // default: canvas root
-          let ancestorId: number | null = immediateParent.parentId
-
-          while (ancestorId !== null) {
-            const ancestor = cardsRef.current.get(ancestorId)
-            if (!ancestor) break
-            const ancestorAbs = getAbsolutePosition(cardsRef.current, ancestorId)
-            const insideAncestor =
-              centerX >= ancestorAbs.x &&
-              centerX <= ancestorAbs.x + ancestor.width &&
-              centerY >= ancestorAbs.y &&
-              centerY <= ancestorAbs.y + ancestor.height
-            if (insideAncestor) {
-              newParentId = ancestorId
-              break
-            }
-            ancestorId = ancestor.parentId
-          }
+          // The card left its immediate parent. Always unnest to canvas root.
+          // If the user was hovering a title bar, nestTargetId would have been
+          // set and handled by the NEST path above -- so reaching here means
+          // the user genuinely dragged out with no re-nest intent.
+          const newParentId: number | null = null
 
           const stateBefore = new Map(cardsRef.current)
 
@@ -902,6 +885,49 @@ export default function App() {
   )
 
   // ---------------------------------------------------------------------------
+  // RESET CARD SIZE (double-click on card body)
+  // ---------------------------------------------------------------------------
+  const handleResetSize = useCallback(
+    async (cardId: number) => {
+      const card = cardsRef.current.get(cardId)
+      if (!card) return
+
+      // Optimistic update
+      setCards((prev) => {
+        let updated = new Map(prev)
+        const c = updated.get(cardId)
+        if (!c) return prev
+        updated.set(cardId, { ...c, width: MIN_W, height: MIN_H })
+        // If the card has a parent, re-run auto-resize so the parent adjusts.
+        if (c.parentId !== null) {
+          updated = autoResizeParent(updated, c.parentId)
+        }
+        return updated
+      })
+
+      // Persist after the state update captures the new size
+      try {
+        // Read back the card after the optimistic update (use MIN_W/MIN_H directly
+        // since the state setter is async and we know exactly what we set).
+        await db.updateNodeLayout(cardId, 1, card.x, card.y, MIN_W, MIN_H)
+        setError(null)
+      } catch (err) {
+        console.error('[App] Failed to persist reset size:', err)
+        setError('Failed to save size reset.')
+        // Revert
+        setCards((prev) => {
+          const updated = new Map(prev)
+          const c = updated.get(cardId)
+          if (!c) return prev
+          updated.set(cardId, { ...c, width: card.width, height: card.height })
+          return updated
+        })
+      }
+    },
+    []
+  )
+
+  // ---------------------------------------------------------------------------
   // DELETE CARD (Delete key when a card is selected)
   // ---------------------------------------------------------------------------
   useEffect(() => {
@@ -956,14 +982,26 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   // Issue 2: compute the single drop target ID for the current drag.
-  // Priority: explicit nest target > current parent of dragged card > none.
-  // This is passed into every Card so it can show the dashed blue indicator
-  // on exactly one card at a time.
+  // Priority: explicit nest target > current parent (only if card is still inside it) > null.
+  // The indicator must always reflect what will actually happen on mouse-up.
   const dropTargetId: number | null = (() => {
     if (!dragState) return null
     if (dragState.nestTargetId !== null) return dragState.nestTargetId
     const dragged = cards.get(dragState.cardId)
-    return dragged?.parentId ?? null
+    if (!dragged || dragged.parentId === null) return null
+    // Only show the parent highlight while the card is still physically inside it.
+    const parentCard = cards.get(dragged.parentId)
+    if (!parentCard) return null
+    const absPos = getAbsolutePosition(cards, dragState.cardId)
+    const centerX = absPos.x + dragged.width / 2
+    const centerY = absPos.y + dragged.height / 2
+    const parentAbs = getAbsolutePosition(cards, dragged.parentId)
+    const insideParent =
+      centerX >= parentAbs.x &&
+      centerX <= parentAbs.x + parentCard.width &&
+      centerY >= parentAbs.y &&
+      centerY <= parentAbs.y + parentCard.height
+    return insideParent ? dragged.parentId : null
   })()
 
   const topLevelCards: CardData[] = []
@@ -1157,6 +1195,7 @@ export default function App() {
                 onDragStart={handleCardDragStart}
                 onSelect={setSelectedId}
                 onContentChange={handleContentChange}
+                onResetSize={handleResetSize}
                 onAutoFocusConsumed={() => setNewCardId(null)}
                 zoom={viewport.zoom}
               />
@@ -1179,6 +1218,7 @@ export default function App() {
               onDragStart={handleCardDragStart}
               onSelect={setSelectedId}
               onContentChange={handleContentChange}
+              onResetSize={handleResetSize}
               onAutoFocusConsumed={() => setNewCardId(null)}
               zoom={viewport.zoom}
               ghostZIndex={10000}
