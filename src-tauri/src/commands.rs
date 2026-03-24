@@ -246,20 +246,33 @@ pub fn delete_node(
 /// A relationship between two nodes.
 /// Field names match the TypeScript `RelationshipData` interface in
 /// `src/ipc/db.ts` exactly (snake_case serialized via serde).
+///
+/// `rel_node_id`: the companion node (node_type = 'relationship') that
+/// represents this relationship's label on the canvas. None for legacy rows
+/// that pre-date the relationship-as-node schema.
 #[derive(Debug, Serialize)]
 pub struct RelationshipData {
     pub id: i64,
     pub source_id: i64,
     pub target_id: i64,
     pub action: String,
+    pub rel_node_id: Option<i64>,
 }
 
 /// Insert a new relationship between two nodes.
-/// Returns the created relationship including its new ID.
+/// Returns the created relationship including its new ID and rel_node_id.
 ///
-/// `map_id` is accepted for API consistency but not yet stored --
-/// relationships are currently map-agnostic (one canvas per app).
-/// When relationships gain a map_id column this parameter will be used.
+/// In a single transaction:
+///   1. Creates a companion node (node_type = 'relationship') whose content
+///      mirrors the action label. This node is the canvas-renderable entity.
+///   2. Inserts a layout row for that node at (0, 0) with placeholder size
+///      80x28. The frontend must update the position after rendering.
+///   3. Inserts the relationship row referencing both endpoint nodes and the
+///      new companion node via rel_node_id.
+///
+/// `map_id` is used to place the companion node's layout row. When
+/// relationships gain their own map_id column this parameter will scope the
+/// relationship row as well.
 ///
 /// Matches: `DbInterface.createRelationship(sourceId, targetId, action, mapId)`
 #[tauri::command]
@@ -268,26 +281,68 @@ pub fn create_relationship(
     source_id: i64,
     target_id: i64,
     action: String,
-    _map_id: i64,
+    map_id: i64,
 ) -> Result<RelationshipData, String> {
     let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
 
-    conn.execute(
-        "INSERT INTO relationships (source_id, target_id, action) \
-         VALUES (?1, ?2, ?3)",
-        rusqlite::params![source_id, target_id, action],
-    )
-    .map_err(|e| sql_err("create_relationship", e))?;
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN create_relationship", e))?;
 
-    let id = conn.last_insert_rowid();
+    let result = (|| -> Result<RelationshipData, rusqlite::Error> {
+        // 1. Create the companion relationship-node. Content mirrors action.
+        conn.execute(
+            "INSERT INTO nodes (parent_id, content, node_type, created_at, updated_at) \
+             VALUES (NULL, ?1, 'relationship', datetime('now'), datetime('now'))",
+            rusqlite::params![action],
+        )?;
+        let rel_node_id = conn.last_insert_rowid();
 
-    Ok(RelationshipData { id, source_id, target_id, action })
+        // 2. Place the companion node on the map at a placeholder position.
+        //    The frontend will move it to its midpoint position after first render.
+        conn.execute(
+            "INSERT INTO layout (node_id, map_id, x, y, width, height, min_width, min_height) \
+             VALUES (?1, ?2, 0.0, 0.0, 80.0, 28.0, NULL, NULL)",
+            rusqlite::params![rel_node_id, map_id],
+        )?;
+
+        // 3. Insert the relationship row, linking source, target, and the companion node.
+        conn.execute(
+            "INSERT INTO relationships (source_id, target_id, action, rel_node_id) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![source_id, target_id, action, rel_node_id],
+        )?;
+        let id = conn.last_insert_rowid();
+
+        Ok(RelationshipData {
+            id,
+            source_id,
+            target_id,
+            action,
+            rel_node_id: Some(rel_node_id),
+        })
+    })();
+
+    match result {
+        Ok(data) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT create_relationship", e))?;
+            Ok(data)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(sql_err("create_relationship transaction", e))
+        }
+    }
 }
 
 /// Return all relationships.
 /// For now the single-map invariant means this is equivalent to
 /// "all relationships on the given map." When relationships gain
 /// a map_id column, filter by it here.
+///
+/// The label is sourced from the companion node's content (authoritative)
+/// when rel_node_id is present, falling back to the denormalized action
+/// column for legacy rows where rel_node_id IS NULL.
 ///
 /// Matches: `DbInterface.getMapRelationships(mapId)`
 #[tauri::command]
@@ -299,7 +354,11 @@ pub fn get_map_relationships(
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, source_id, target_id, action FROM relationships",
+            "SELECT r.id, r.source_id, r.target_id, \
+                    COALESCE(n.content, r.action) AS action, \
+                    r.rel_node_id \
+             FROM relationships r \
+             LEFT JOIN nodes n ON n.id = r.rel_node_id",
         )
         .map_err(|e| sql_err("prepare get_map_relationships", e))?;
 
@@ -310,6 +369,7 @@ pub fn get_map_relationships(
                 source_id: row.get(1)?,
                 target_id: row.get(2)?,
                 action: row.get(3)?,
+                rel_node_id: row.get(4)?,
             })
         })
         .map_err(|e| sql_err("query get_map_relationships", e))?;
@@ -324,6 +384,11 @@ pub fn get_map_relationships(
 
 /// Update the action label on a relationship. Also bumps updated_at.
 ///
+/// Keeps both the denormalized `action` column and the companion node's
+/// `content` in sync. The node update is a no-op (0 rows affected) for
+/// legacy rows where rel_node_id IS NULL -- that is intentional and not
+/// treated as an error.
+///
 /// Matches: `DbInterface.updateRelationship(id, action)`
 #[tauri::command]
 pub fn update_relationship(
@@ -333,18 +398,49 @@ pub fn update_relationship(
 ) -> Result<(), String> {
     let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
 
-    let rows_affected = conn
-        .execute(
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN update_relationship", e))?;
+
+    let result = (|| -> Result<(), rusqlite::Error> {
+        // Update the denormalized action column on the relationship row.
+        let rows_affected = conn.execute(
             "UPDATE relationships SET action = ?1, updated_at = datetime('now') WHERE id = ?2",
             rusqlite::params![action, id],
-        )
-        .map_err(|e| sql_err("update_relationship", e))?;
+        )?;
 
-    if rows_affected == 0 {
-        return Err(format!("[db] update_relationship: relationship {} not found", id));
+        if rows_affected == 0 {
+            // Signal "not found" to the outer match via QueryReturnedNoRows.
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        // Sync the companion node's content (authoritative label source).
+        // Uses a subquery to locate rel_node_id so no extra round-trip is needed.
+        // Intentionally does nothing if rel_node_id IS NULL (legacy row).
+        conn.execute(
+            "UPDATE nodes \
+             SET content = ?1, updated_at = datetime('now') \
+             WHERE id = (SELECT rel_node_id FROM relationships WHERE id = ?2)",
+            rusqlite::params![action, id],
+        )?;
+
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT update_relationship", e))?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                Err(format!("[db] update_relationship: relationship {} not found", id))
+            } else {
+                Err(sql_err("update_relationship transaction", e))
+            }
+        }
     }
-
-    Ok(())
 }
 
 /// Swap the direction of a relationship: source_id <-> target_id.
@@ -376,7 +472,20 @@ pub fn flip_relationship(
     Ok(())
 }
 
-/// Delete a relationship by ID.
+/// Delete a relationship by ID, and also delete its companion node.
+///
+/// SQLite FK cascades only flow in one direction per constraint. The FK
+/// `relationships.rel_node_id -> nodes.id ON DELETE CASCADE` means deleting
+/// the *node* cascades to the relationship row -- but deleting the
+/// *relationship* row does not cascade to the node. We handle that direction
+/// explicitly inside a transaction:
+///
+///   1. Read rel_node_id from the relationship (may be NULL for legacy rows).
+///   2. DELETE FROM relationships WHERE id = ?   (removes the edge)
+///   3. DELETE FROM nodes WHERE id = rel_node_id  (removes the label node;
+///      its layout row cascades automatically via nodes -> layout FK)
+///
+/// Step 3 is skipped if rel_node_id is NULL.
 ///
 /// Matches: `DbInterface.deleteRelationship(id)`
 #[tauri::command]
@@ -386,18 +495,55 @@ pub fn delete_relationship(
 ) -> Result<(), String> {
     let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
 
-    let rows_affected = conn
-        .execute(
+    // Read rel_node_id before opening the transaction so we know what to clean up.
+    let rel_node_id: Option<i64> = conn
+        .query_row(
+            "SELECT rel_node_id FROM relationships WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                format!("[db] delete_relationship: relationship {} not found", id)
+            } else {
+                sql_err("delete_relationship lookup", e)
+            }
+        })?;
+
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN delete_relationship", e))?;
+
+    let result = (|| -> Result<(), rusqlite::Error> {
+        // Delete the relationship row first.
+        conn.execute(
             "DELETE FROM relationships WHERE id = ?1",
             rusqlite::params![id],
-        )
-        .map_err(|e| sql_err("delete_relationship", e))?;
+        )?;
 
-    if rows_affected == 0 {
-        return Err(format!("[db] delete_relationship: relationship {} not found", id));
+        // Delete the companion node if one exists.
+        // The node's layout row is removed automatically via ON DELETE CASCADE
+        // on layout.node_id -> nodes.id.
+        if let Some(node_id) = rel_node_id {
+            conn.execute(
+                "DELETE FROM nodes WHERE id = ?1",
+                rusqlite::params![node_id],
+            )?;
+        }
+
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT delete_relationship", e))?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(sql_err("delete_relationship transaction", e))
+        }
     }
-
-    Ok(())
 }
 
 /// Reparent a node and update its layout atomically.

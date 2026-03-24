@@ -20,13 +20,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     parent_id   INTEGER REFERENCES nodes(id) ON DELETE RESTRICT,
     content     TEXT    NOT NULL DEFAULT '',
     node_type   TEXT    NOT NULL DEFAULT 'card'
-                        CHECK(node_type IN ('card')),
+                        CHECK(node_type IN ('card', 'relationship')),
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     metadata    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_node_type ON nodes(node_type);
 
 CREATE TABLE IF NOT EXISTS layout (
     id          INTEGER PRIMARY KEY,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS relationships (
     source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     action      TEXT    NOT NULL DEFAULT '',
+    rel_node_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     metadata    TEXT
@@ -99,12 +101,66 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
     for sql in &[
         "ALTER TABLE layout ADD COLUMN min_width  REAL DEFAULT NULL",
         "ALTER TABLE layout ADD COLUMN min_height REAL DEFAULT NULL",
+        // Phase 2: relationship-as-node. Add rel_node_id to relationships.
+        "ALTER TABLE relationships ADD COLUMN rel_node_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE",
     ] {
         if let Err(e) = conn.execute_batch(sql) {
             if !e.to_string().contains("duplicate column name") {
                 return Err(e);
             }
         }
+    }
+
+    // --- 4b. Rebuild nodes table to expand the node_type CHECK constraint ---
+    // SQLite cannot ALTER a CHECK constraint. The only safe path is a
+    // table rebuild: rename -> recreate -> copy -> drop old.
+    // We detect whether the rebuild is needed by checking if the current
+    // schema definition still contains the old single-value CHECK.
+    // This block is idempotent: once the new schema is in place, the
+    // string match fails and the block is skipped on all subsequent startups.
+    let old_check_present: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='nodes'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|sql| sql.contains("CHECK(node_type IN ('card'))"))
+        .unwrap_or(false);
+
+    if old_check_present {
+        eprintln!("[db] Migrating nodes table: expanding node_type CHECK constraint...");
+        conn.execute_batch("
+            PRAGMA foreign_keys = OFF;
+
+            BEGIN;
+
+            ALTER TABLE nodes RENAME TO nodes_old;
+
+            CREATE TABLE nodes (
+                id          INTEGER PRIMARY KEY,
+                parent_id   INTEGER REFERENCES nodes(id) ON DELETE RESTRICT,
+                content     TEXT    NOT NULL DEFAULT '',
+                node_type   TEXT    NOT NULL DEFAULT 'card'
+                                    CHECK(node_type IN ('card', 'relationship')),
+                created_at  TEXT    NOT NULL,
+                updated_at  TEXT    NOT NULL,
+                metadata    TEXT
+            );
+
+            INSERT INTO nodes (id, parent_id, content, node_type, created_at, updated_at, metadata)
+            SELECT              id, parent_id, content, node_type, created_at, updated_at, metadata
+            FROM nodes_old;
+
+            DROP TABLE nodes_old;
+
+            COMMIT;
+
+            PRAGMA foreign_keys = ON;
+
+            CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_nodes_node_type ON nodes(node_type);
+        ")?;
+        eprintln!("[db] nodes table migration complete.");
     }
 
     // --- 5. Seed default map if none exists ---

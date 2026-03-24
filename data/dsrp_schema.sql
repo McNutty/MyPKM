@@ -87,12 +87,13 @@ CREATE TABLE nodes (
     content     TEXT    NOT NULL DEFAULT '',
 
     -- DSRP element type. 'card' for Phase 1.
-    -- 'relationship' added in Phase 2 (no schema migration needed).
+    -- 'relationship' added in Phase 2: relationship labels are first-class
+    -- nodes on the canvas, linked back to the relationships row via
+    -- relationships.rel_node_id.
     -- This is NOT a structural capability flag. It identifies
     -- which DSRP operation this node represents.
-    -- Extend the CHECK list in Phase 2: CHECK(node_type IN ('card', 'relationship'))
     node_type   TEXT    NOT NULL DEFAULT 'card'
-                        CHECK(node_type IN ('card')),
+                        CHECK(node_type IN ('card', 'relationship')),
 
     created_at  TEXT    NOT NULL,  -- ISO-8601 UTC
     updated_at  TEXT    NOT NULL,  -- ISO-8601 UTC; update on content/parent change
@@ -110,9 +111,9 @@ CREATE TABLE nodes (
 -- "give me all children of node X" => WHERE parent_id = X
 CREATE INDEX idx_nodes_parent_id ON nodes(parent_id);
 
--- Index for node_type if Phase 2 queries filter by type frequently.
--- Omit if premature; add it in Phase 2 when needed.
--- CREATE INDEX idx_nodes_node_type ON nodes(node_type);
+-- Index for node_type: Phase 2 queries filter by type to separate
+-- card nodes from relationship nodes (e.g., get_map_nodes for rendering).
+CREATE INDEX idx_nodes_node_type ON nodes(node_type);
 
 
 -- ============================================================
@@ -211,6 +212,19 @@ CREATE TABLE IF NOT EXISTS relationships (
     source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     action      TEXT    NOT NULL DEFAULT '',
+
+    -- The companion node that represents this relationship's label on the
+    -- canvas. node_type = 'relationship' in the nodes table.
+    -- Nullable: legacy rows and rows created before the canvas places the
+    -- label node may have NULL here. The application keeps action and
+    -- nodes.content in sync (action is a denormalized cache).
+    -- ON DELETE CASCADE: if the relationship-node is deleted (e.g., the
+    -- user removes it from the canvas), the relationship row is also removed.
+    -- The reverse (delete relationship -> delete node) is handled explicitly
+    -- in the delete_relationship command, since SQLite FK cascades only
+    -- flow in one direction per constraint.
+    rel_node_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
+
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     metadata    TEXT    -- must be valid JSON or NULL; enforced at app layer
