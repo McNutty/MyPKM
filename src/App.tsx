@@ -1235,6 +1235,31 @@ export default function App() {
         })
         try {
           await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height, finalMinW, finalMinH)
+
+          // Persist any ancestor whose size grew due to autoResizeParent being
+          // called during the resize drag. autoResizeParent fires on every
+          // mousemove and updates React state, but only the resized card was
+          // previously written to DB -- leaving parent sizes stale on reload.
+          if (card.parentId !== null) {
+            const ancestorWrites: Promise<void>[] = []
+            let ancestorId: number | null = card.parentId
+            while (ancestorId !== null) {
+              const ancestor = cardsRef.current.get(ancestorId)
+              if (!ancestor) break
+              ancestorWrites.push(
+                db.updateNodeLayout(
+                  ancestor.id, 1,
+                  ancestor.x, ancestor.y,
+                  ancestor.width, ancestor.height,
+                  ancestor.minWidth, ancestor.minHeight
+                )
+              )
+              ancestorId = ancestor.parentId
+            }
+            await Promise.all(ancestorWrites)
+          }
+
+          setError(null)
         } catch (err) {
           console.error('[App] Failed to persist resize:', err)
           setError('Failed to save resize. Changes may be lost.')

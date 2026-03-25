@@ -4,7 +4,7 @@
 	- Hide the empty label when the arrow is not selected. It should only display the dotted line when not selected. The tradeoff being that you need to select the line in order to modify the curvature, since you need the label for that. Or maybe instead reveal it on hover instead of selection? Yes, this would be best.
 - Still thinking about this, ignore for now!
 	- Add some sort of card alignment choice. A double click aligns all cards according to alignment choice. List, column and no alignment. A resized card gets "no alignment". A double click then works as now.
-- Modify the "parent double-click" resizing functionality by adding a top-left alignment of all children cards before resizing. Should also activate when dropping a card on an empty card. It should move all cards to the top left before resizing the parent. The relative positions of all cards should be unchanged, but the top margin to the card highest up, and the left margin to the leftmost card should be the same as the new right- and bottom margins after resizing the parent. It will have the effect of "centering" the contents on double click. Actually, an easier way of explaining might be to say that the end result of a double click should be that the margins between the content and **all** borders should be the same as the right/bottom margins after a current double click. "Fit-to-contents" is a good name!
+- ~~Fit-to-contents (parent double-click + drop-on-empty)~~ — Moved to Handled.
 - ~~Pushing Mode~~ — Moved to Handled.
 - We still have some issue with size persistence I've noticed. My tests show that when a child is manually resized but not the parent, the parent shrinks a bit upon restart so the resized child might "stick out".
 
@@ -132,3 +132,4 @@
 62. Double-click parent card -> relative positions of children to each other are preserved - OK!
 63. Drop a card onto an empty card -> fit-to-contents applied automatically - OK!
 64. Double-click leaf card -> still resets to default size (no regression) - OK!
+65. Manually resize a child card (make it bigger), reload -> parent still contains the child (no sticking out) - OK!
