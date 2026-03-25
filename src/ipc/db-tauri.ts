@@ -96,6 +96,10 @@ export class TauriDb implements DbInterface {
     return invoke('update_relationship', { id, action })
   }
 
+  async reattachRelationship(id: number, newSourceId: number, newTargetId: number): Promise<void> {
+    return invoke('reattach_relationship', { id, newSourceId, newTargetId })
+  }
+
   async flipRelationship(id: number): Promise<void> {
     return invoke('flip_relationship', { id })
   }

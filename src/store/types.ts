@@ -91,3 +91,20 @@ export interface ConnectingState {
   /** Canvas-space Y where the drag started (center of source card edge) */
   startY: number
 }
+
+/**
+ * Active state while the user is re-attaching one endpoint of an existing
+ * relationship. The dragged endpoint follows the cursor; the fixed endpoint
+ * stays anchored to its original card.
+ */
+export interface ReattachState {
+  /** The relationship being re-wired */
+  relId: number
+  /** Which endpoint is being dragged */
+  end: 'source' | 'target'
+  /** The card ID of the endpoint that is NOT being dragged (stays fixed) */
+  fixedCardId: number
+  /** Canvas-space position of the fixed endpoint (used to draw the ghost line) */
+  fixedX: number
+  fixedY: number
+}

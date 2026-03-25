@@ -19,7 +19,7 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import type { CardData, CanvasViewport, DragState, ResizeState, RelationshipData, ConnectingState } from './store/types'
+import type { CardData, CanvasViewport, DragState, ResizeState, RelationshipData, ConnectingState, ReattachState } from './store/types'
 import {
   getAbsolutePosition,
   getAbsoluteCenter,
@@ -91,6 +91,10 @@ export default function App() {
   // Current mouse position in canvas coordinates, tracked during connection draw
   const [connectingMousePos, setConnectingMousePos] = useState<{ x: number; y: number } | null>(null)
   const [editingRelId, setEditingRelId] = useState<number | null>(null)
+
+  // M3: Re-attach gesture -- dragging an endpoint handle to rewire a relationship
+  const [reattachState, setReattachState] = useState<ReattachState | null>(null)
+  const [reattachMousePos, setReattachMousePos] = useState<{ x: number; y: number } | null>(null)
 
   // M3: Relationship card drag state
   // relCardPositions: absolute canvas-space position of each relationship card,
@@ -286,6 +290,12 @@ export default function App() {
           panY: mouseY - (mouseY - v.panY) * (newZoom / v.zoom),
         }
       })
+    } else if (e.shiftKey) {
+      // Shift+scroll -- horizontal pan (deltaY drives left/right)
+      setViewport((v) => ({
+        ...v,
+        panX: v.panX - e.deltaY,
+      }))
     } else {
       // Pan
       setViewport((v) => ({
@@ -481,6 +491,38 @@ export default function App() {
     [viewport.panX, viewport.panY, viewport.zoom]
   )
 
+  // ---------------------------------------------------------------------------
+  // ENDPOINT DRAG (re-attach gesture) -- start dragging a relationship endpoint
+  // ---------------------------------------------------------------------------
+  const handleEndpointDragStart = useCallback(
+    (relId: number, end: 'source' | 'target', e: React.MouseEvent) => {
+      e.stopPropagation()
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      const rel = relationshipsRef.current.find((r) => r.id === relId)
+      if (!rel) return
+
+      const fixedCardId = end === 'source' ? rel.targetId : rel.sourceId
+      const fixedCard = cardsRef.current.get(fixedCardId)
+      if (!fixedCard) return
+
+      // Anchor the ghost line at the fixed card's center
+      const fixedAbs = getAbsoluteCenter(cardsRef.current, fixedCardId)
+
+      // Start the mouse position at the dragged endpoint so the line appears
+      // in-place before the cursor moves
+      const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+      const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+
+      setReattachState({ relId, end, fixedCardId, fixedX: fixedAbs.x, fixedY: fixedAbs.y })
+      setReattachMousePos({ x: canvasX, y: canvasY })
+      // Keep the relationship selected so the context is visible
+      setSelectedId(null)
+    },
+    [viewport.panX, viewport.panY, viewport.zoom]
+  )
+
   // (Resize is now detected in handleMouseMove during pendingDrag promotion)
 
   // ---------------------------------------------------------------------------
@@ -530,7 +572,7 @@ export default function App() {
       // (those are mutually exclusive with a pending drag in practice, but
       // the guard keeps the logic airtight).
       const pending = pendingDragRef.current
-      if (pending && !dragState && !resizeState && draggingRelCardId === null) {
+      if (pending && !dragState && !resizeState && draggingRelCardId === null && !reattachState) {
         const dist =
           Math.abs(e.clientX - pending.startClientX) +
           Math.abs(e.clientY - pending.startClientY)
@@ -552,7 +594,7 @@ export default function App() {
           const localY = pending.startClientY - pending.cardRect.top
           const nearRight = localX >= pending.cardRect.width - RESIZE_EDGE
           const nearBottom = localY >= pending.cardRect.height - RESIZE_EDGE
-          isResize = nearRight || nearBottom
+          isResize = nearRight && nearBottom
         }
 
         if (isResize) {
@@ -669,6 +711,14 @@ export default function App() {
         const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
         const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
         setConnectingMousePos({ x: canvasX, y: canvasY })
+        return
+      }
+
+      // --- RE-ATTACH GESTURE ---
+      if (reattachState) {
+        const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+        const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+        setReattachMousePos({ x: canvasX, y: canvasY })
         return
       }
 
@@ -924,7 +974,7 @@ export default function App() {
         return updated
       })
     },
-    [dragState, resizeState, isPanning, connectingState, draggingRelCardId, relCardDragOffset, viewport]
+    [dragState, resizeState, isPanning, connectingState, reattachState, draggingRelCardId, relCardDragOffset, viewport]
   )
 
   // ---------------------------------------------------------------------------
@@ -1059,6 +1109,68 @@ export default function App() {
       } catch (err) {
         console.error('[App] Failed to create relationship:', err)
         setError(`Failed to create relationship: ${err}`)
+      }
+      return
+    }
+
+    // --- RE-ATTACH GESTURE COMPLETE ---
+    if (reattachState) {
+      const { relId, end, fixedCardId } = reattachState
+      const mousePos = reattachMousePos
+      setReattachState(null)
+      setReattachMousePos(null)
+
+      if (!mousePos) return
+
+      // Find the topmost card under the cursor, excluding the fixed endpoint card
+      // (can't collapse both ends to the same card) and excluding the same card
+      // already attached to this end (no-op re-attach).
+      const rel = relationshipsRef.current.find((r) => r.id === relId)
+      if (!rel) return
+
+      const currentEndCardId = end === 'source' ? rel.sourceId : rel.targetId
+
+      let targetId: number | null = null
+      let bestArea = Infinity
+      for (const [id, candidate] of cardsRef.current) {
+        // Can't re-attach to the fixed endpoint card (self-loop)
+        if (id === fixedCardId) continue
+        const absPos = getAbsolutePosition(cardsRef.current, id)
+        const area = candidate.width * candidate.height
+        if (
+          mousePos.x >= absPos.x &&
+          mousePos.x <= absPos.x + candidate.width &&
+          mousePos.y >= absPos.y &&
+          mousePos.y <= absPos.y + candidate.height &&
+          area < bestArea
+        ) {
+          targetId = id
+          bestArea = area
+        }
+      }
+
+      // Released on empty canvas, or on the same card already on this end -- cancel
+      if (targetId === null || targetId === currentEndCardId) return
+
+      const newSourceId = end === 'source' ? targetId : rel.sourceId
+      const newTargetId = end === 'target' ? targetId : rel.targetId
+
+      // Optimistic update
+      const relsBefore = [...relationshipsRef.current]
+      setRelationships((prev) =>
+        prev.map((r) =>
+          r.id === relId ? { ...r, sourceId: newSourceId, targetId: newTargetId } : r
+        )
+      )
+      setSelectedRelId(relId)
+
+      try {
+        await db.reattachRelationship(relId, newSourceId, newTargetId)
+        setError(null)
+      } catch (err) {
+        console.error('[App] Failed to reattach relationship:', err)
+        setError(`Failed to rewire relationship: ${err}`)
+        setRelationships(relsBefore)
       }
       return
     }
@@ -1446,7 +1558,7 @@ export default function App() {
       // descendants (children move with the parent, so their rel labels shift too).
       await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
     }
-  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, draggingRelCardId, relCardDragOffset, persistRelCardPositions, getRelsForDraggedSubtree])
+  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, reattachState, reattachMousePos, draggingRelCardId, relCardDragOffset, persistRelCardPositions, getRelsForDraggedSubtree])
 
   // ---------------------------------------------------------------------------
   // CREATE NEW CARD (double-click on empty canvas)
@@ -2002,7 +2114,7 @@ export default function App() {
           flex: 1,
           overflow: 'hidden',
           backgroundColor: '#f5f5f5',
-          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : spaceHeld ? 'grab' : 'default',
+          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : (reattachState || connectingState) ? 'crosshair' : spaceHeld ? 'grab' : 'default',
           position: 'relative',
         }}
         onWheel={handleWheel}
@@ -2105,8 +2217,11 @@ export default function App() {
             onEditStart={setEditingRelId}
             onEditCancel={() => setEditingRelId(null)}
             onRelCardDragStart={handleRelCardDragStart}
+            onEndpointDragStart={handleEndpointDragStart}
             connectingSource={connectingState ? { x: connectingState.startX, y: connectingState.startY } : null}
             connectingMouse={connectingMousePos}
+            reattachFixed={reattachState ? { x: reattachState.fixedX, y: reattachState.fixedY } : null}
+            reattachMouse={reattachMousePos}
           />
 
           {topLevelCards.map((card) => {

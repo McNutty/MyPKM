@@ -194,7 +194,7 @@ export const Card: React.FC<CardProps> = React.memo(({
     const localY = e.clientY - rect.top
     const nearRight = localX >= rect.width - RESIZE_EDGE
     const nearBottom = localY >= rect.height - RESIZE_EDGE
-    setIsInResizeZone(nearRight || nearBottom)
+    setIsInResizeZone(nearRight && nearBottom)
   }, [isEditing])
 
   const handleRootMouseLeave = useCallback(() => {

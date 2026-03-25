@@ -55,6 +55,11 @@ export interface DbInterface {
   createRelationship(sourceId: number, targetId: number, action: string, mapId: number): Promise<RelationshipData>
   getMapRelationships(mapId: number): Promise<RelationshipData[]>
   updateRelationship(id: number, action: string): Promise<void>
+  /**
+   * Rewire one or both endpoints of a relationship.
+   * Pass the existing source/target for the end you are NOT changing.
+   */
+  reattachRelationship(id: number, newSourceId: number, newTargetId: number): Promise<void>
   flipRelationship(id: number): Promise<void>
   deleteRelationship(id: number): Promise<void>
 }

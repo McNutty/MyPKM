@@ -95,3 +95,9 @@
 40. F key on selected relationship -> flips direction (arrowhead reverses) - OK
 41. No `[db]` prefix in any error message reaching the user - OK as far as I can tell.
 42. "Containers" replaced with DSRP terms in code comments - I'll trust you on this one.
+43. Resize only triggers from lower-right corner, not full right/bottom border
+44. Shift+Scroll pans horizontally (up=left, down=right) - OK!
+45. Select an arrow, drag the source handle to a different card -> relationship rewires - OK!
+46. Select an arrow, drag the target handle to a different card -> relationship rewires - OK!
+47. Re-attach cancels when released on empty canvas - OK!
+48. Re-attach rejects self-loops (source === target) - OK!

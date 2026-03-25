@@ -141,6 +141,12 @@ export class StubDb implements DbInterface {
     this.relationships.set(id, { ...rel, action })
   }
 
+  async reattachRelationship(id: number, newSourceId: number, newTargetId: number): Promise<void> {
+    const rel = this.relationships.get(id)
+    if (!rel) throw new Error(`Relationship ${id} not found`)
+    this.relationships.set(id, { ...rel, sourceId: newSourceId, targetId: newTargetId })
+  }
+
   async flipRelationship(id: number): Promise<void> {
     const rel = this.relationships.get(id)
     if (!rel) throw new Error(`Relationship ${id} not found`)

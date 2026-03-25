@@ -166,6 +166,11 @@ interface RelationshipLineProps {
   isEditing: boolean
   onSelect: (relId: number) => void
   onEditStart: (relId: number) => void
+  /**
+   * Called when the user starts dragging an endpoint handle to re-attach it.
+   * Only fires when the relationship is selected.
+   */
+  onEndpointDragStart: (relId: number, end: 'source' | 'target', e: React.MouseEvent) => void
 }
 
 export const RelationshipLine: React.FC<RelationshipLineProps> = ({
@@ -178,6 +183,7 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
   isEditing,
   onSelect,
   onEditStart,
+  onEndpointDragStart,
 }) => {
   const isUnlabeled = rel.action === ''
 
@@ -247,6 +253,43 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
         markerEnd={`url(#${arrowId})`}
         style={{ cursor: 'pointer', pointerEvents: 'none' }}
       />
+
+      {/* Endpoint drag handles -- only visible and interactive when selected.
+          Source handle (open circle at start): lets the user re-attach the source end.
+          Target handle (filled circle at end): lets the user re-attach the target end.
+          pointerEvents='all' overrides the SVG parent's pointerEvents='none'. */}
+      {isSelected && (
+        <>
+          <circle
+            cx={start.x}
+            cy={start.y}
+            r={6}
+            fill="#fff"
+            stroke="#1976d2"
+            strokeWidth={2}
+            style={{ cursor: 'crosshair', pointerEvents: 'all' }}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              if (e.button !== 0) return
+              onEndpointDragStart(rel.id, 'source', e)
+            }}
+          />
+          <circle
+            cx={end.x}
+            cy={end.y}
+            r={6}
+            fill="#1976d2"
+            stroke="#1976d2"
+            strokeWidth={2}
+            style={{ cursor: 'crosshair', pointerEvents: 'all' }}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              if (e.button !== 0) return
+              onEndpointDragStart(rel.id, 'target', e)
+            }}
+          />
+        </>
+      )}
     </>
   )
 }
@@ -384,9 +427,13 @@ interface RelationshipOverlayProps {
   onEditStart: (relId: number) => void
   onEditCancel: () => void
   onRelCardDragStart: (relId: number, e: React.MouseEvent) => void
+  onEndpointDragStart: (relId: number, end: 'source' | 'target', e: React.MouseEvent) => void
   // In-progress connection draw
   connectingSource?: { x: number; y: number } | null
   connectingMouse?: { x: number; y: number } | null
+  // In-progress re-attach gesture
+  reattachFixed?: { x: number; y: number } | null
+  reattachMouse?: { x: number; y: number } | null
 }
 
 import { getAbsolutePosition } from '../store/canvas-store'
@@ -402,8 +449,11 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
   onEditStart,
   onEditCancel,
   onRelCardDragStart,
+  onEndpointDragStart,
   connectingSource,
   connectingMouse,
+  reattachFixed,
+  reattachMouse,
 }) => {
   // Build position lookup: for each relationship, resolve absolute rects for
   // both source and target. Skip any relationship where either card is missing
@@ -492,6 +542,7 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
             isEditing={editingRelId === rel.id}
             onSelect={onSelectRel}
             onEditStart={onEditStart}
+            onEndpointDragStart={onEndpointDragStart}
           />
         ))}
 
@@ -511,6 +562,38 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
             <circle
               cx={connectingMouse.x}
               cy={connectingMouse.y}
+              r={4}
+              fill="#1976d2"
+              opacity={0.7}
+            />
+          </>
+        )}
+
+        {/* In-progress re-attach gesture: dashed line from fixed endpoint to mouse */}
+        {reattachFixed && reattachMouse && (
+          <>
+            <line
+              x1={reattachFixed.x}
+              y1={reattachFixed.y}
+              x2={reattachMouse.x}
+              y2={reattachMouse.y}
+              stroke="#1976d2"
+              strokeWidth={1.5}
+              strokeDasharray="6 4"
+              opacity={0.7}
+            />
+            <circle
+              cx={reattachFixed.x}
+              cy={reattachFixed.y}
+              r={5}
+              fill="#fff"
+              stroke="#1976d2"
+              strokeWidth={2}
+              opacity={0.9}
+            />
+            <circle
+              cx={reattachMouse.x}
+              cy={reattachMouse.y}
               r={4}
               fill="#1976d2"
               opacity={0.7}

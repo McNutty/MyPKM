@@ -625,6 +625,37 @@ pub fn update_relationship(
     }
 }
 
+/// Re-attach one or both endpoints of a relationship.
+///
+/// Rewires `source_id` and/or `target_id` on the relationship row in a single
+/// UPDATE. Pass the existing value for an endpoint you don't want to change.
+///
+/// Matches: `DbInterface.reattachRelationship(id, newSourceId, newTargetId)`
+#[tauri::command]
+pub fn reattach_relationship(
+    state: tauri::State<'_, Mutex<Connection>>,
+    id: i64,
+    new_source_id: i64,
+    new_target_id: i64,
+) -> Result<(), String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE relationships \
+             SET source_id = ?1, target_id = ?2, updated_at = datetime('now') \
+             WHERE id = ?3",
+            rusqlite::params![new_source_id, new_target_id, id],
+        )
+        .map_err(|e| sql_err("reattach_relationship", e))?;
+
+    if rows_affected == 0 {
+        return Err(format!("Relationship {} not found", id));
+    }
+
+    Ok(())
+}
+
 /// Swap the direction of a relationship: source_id <-> target_id.
 /// SQLite evaluates the SET expressions using the old column values,
 /// so a single UPDATE statement is sufficient -- no temporaries needed.
