@@ -31,6 +31,11 @@ pub fn run() {
             commands::reattach_relationship,
             commands::flip_relationship,
             commands::delete_relationship,
+            // M4: map (canvas) management
+            commands::create_map,
+            commands::get_all_maps,
+            commands::rename_map,
+            commands::delete_map,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Plectica");

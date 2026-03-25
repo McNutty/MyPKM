@@ -1,11 +1,13 @@
-import type { DbInterface, NodeWithLayout, RelationshipData } from './db'
+import type { DbInterface, MapData, NodeWithLayout, RelationshipData } from './db'
 
 export class StubDb implements DbInterface {
   private nodes: Map<number, NodeWithLayout> = new Map()
   private relationships: Map<number, RelationshipData> = new Map()
+  private maps: Map<number, MapData> = new Map([[1, { id: 1, name: 'My Canvas' }]])
   private nextNodeId = 1
   private nextLayoutId = 1
   private nextRelId = 1
+  private nextMapId = 2
 
   async getMapNodes(_mapId: number): Promise<NodeWithLayout[]> {
     // Ignores mapId for simplicity -- single map at M1
@@ -156,5 +158,30 @@ export class StubDb implements DbInterface {
   async deleteRelationship(id: number): Promise<void> {
     if (!this.relationships.has(id)) throw new Error(`Relationship ${id} not found`)
     this.relationships.delete(id)
+  }
+
+  // --- Map (canvas) management (M4) ---
+
+  async createMap(name: string): Promise<MapData> {
+    const id = this.nextMapId++
+    const map: MapData = { id, name }
+    this.maps.set(id, map)
+    return map
+  }
+
+  async getAllMaps(): Promise<MapData[]> {
+    return Array.from(this.maps.values())
+  }
+
+  async renameMap(id: number, name: string): Promise<void> {
+    const map = this.maps.get(id)
+    if (!map) throw new Error(`Map ${id} not found`)
+    this.maps.set(id, { ...map, name })
+  }
+
+  async deleteMap(id: number): Promise<number> {
+    if (!this.maps.has(id)) throw new Error(`Map ${id} not found`)
+    this.maps.delete(id)
+    return id
   }
 }

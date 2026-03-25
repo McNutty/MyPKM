@@ -6,6 +6,14 @@ use serde::Serialize;
 // Shared types
 // ============================================================
 
+/// A map (canvas). Returned by create_map and get_all_maps.
+/// Field names match the TypeScript `MapData` interface in `src/ipc/db.ts`.
+#[derive(Debug, Serialize)]
+pub struct MapData {
+    pub id: i64,
+    pub name: String,
+}
+
 /// A node joined with its layout row on a specific map.
 /// Field names match the TypeScript `NodeWithLayout` interface in
 /// `src/ipc/db.ts` exactly (snake_case serialized via serde).
@@ -487,11 +495,13 @@ pub fn create_relationship(
             rusqlite::params![rel_node_id, map_id],
         )?;
 
-        // 3. Insert the relationship row, linking source, target, and the companion node.
+        // 3. Insert the relationship row, linking source, target, companion node, and map.
+        //    map_id scopes the relationship to this canvas so get_map_relationships
+        //    can filter correctly once multiple maps exist.
         conn.execute(
-            "INSERT INTO relationships (source_id, target_id, action, rel_node_id) \
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![source_id, target_id, action, rel_node_id],
+            "INSERT INTO relationships (source_id, target_id, action, rel_node_id, map_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![source_id, target_id, action, rel_node_id, map_id],
         )?;
         let id = conn.last_insert_rowid();
 
@@ -517,10 +527,12 @@ pub fn create_relationship(
     }
 }
 
-/// Return all relationships.
-/// For now the single-map invariant means this is equivalent to
-/// "all relationships on the given map." When relationships gain
-/// a map_id column, filter by it here.
+/// Return all relationships scoped to the given map.
+///
+/// Filters by `r.map_id = ?1`. Rows with `map_id IS NULL` are legacy orphans
+/// created before M4; they are excluded intentionally. The backfill in db.rs
+/// ensures any such rows from a real M3 database are assigned a map_id at
+/// startup before any query reaches this point.
 ///
 /// The label is sourced from the companion node's content (authoritative)
 /// when rel_node_id is present, falling back to the denormalized action
@@ -530,7 +542,7 @@ pub fn create_relationship(
 #[tauri::command]
 pub fn get_map_relationships(
     state: tauri::State<'_, Mutex<Connection>>,
-    _map_id: i64,
+    map_id: i64,
 ) -> Result<Vec<RelationshipData>, String> {
     let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
@@ -540,12 +552,13 @@ pub fn get_map_relationships(
                     COALESCE(n.content, r.action) AS action, \
                     r.rel_node_id \
              FROM relationships r \
-             LEFT JOIN nodes n ON n.id = r.rel_node_id",
+             LEFT JOIN nodes n ON n.id = r.rel_node_id \
+             WHERE r.map_id = ?1",
         )
         .map_err(|e| sql_err("prepare get_map_relationships", e))?;
 
     let rows = stmt
-        .query_map([], |row| {
+        .query_map([map_id], |row| {
             Ok(RelationshipData {
                 id: row.get(0)?,
                 source_id: row.get(1)?,
@@ -755,6 +768,275 @@ pub fn delete_relationship(
         Err(e) => {
             let _ = conn.execute("ROLLBACK", []);
             Err(sql_err("delete_relationship transaction", e))
+        }
+    }
+}
+
+// ============================================================
+// Map (canvas) commands
+// ============================================================
+
+/// Create a new map and return its id and name.
+///
+/// Matches: `DbInterface.createMap(name)`
+#[tauri::command]
+pub fn create_map(
+    state: tauri::State<'_, Mutex<Connection>>,
+    name: String,
+) -> Result<MapData, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    conn.execute(
+        "INSERT INTO maps (name, created_at, updated_at) \
+         VALUES (?1, datetime('now'), datetime('now'))",
+        rusqlite::params![name],
+    )
+    .map_err(|e| sql_err("create_map insert", e))?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(MapData { id, name })
+}
+
+/// Return all maps ordered by creation time (oldest first).
+///
+/// Matches: `DbInterface.getAllMaps()`
+#[tauri::command]
+pub fn get_all_maps(
+    state: tauri::State<'_, Mutex<Connection>>,
+) -> Result<Vec<MapData>, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM maps ORDER BY created_at ASC")
+        .map_err(|e| sql_err("prepare get_all_maps", e))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(MapData {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })
+        .map_err(|e| sql_err("query get_all_maps", e))?;
+
+    let mut maps = Vec::new();
+    for row in rows {
+        maps.push(row.map_err(|e| sql_err("row get_all_maps", e))?);
+    }
+
+    Ok(maps)
+}
+
+/// Rename a map. Also bumps updated_at.
+///
+/// Matches: `DbInterface.renameMap(id, name)`
+#[tauri::command]
+pub fn rename_map(
+    state: tauri::State<'_, Mutex<Connection>>,
+    id: i64,
+    name: String,
+) -> Result<(), String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE maps SET name = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![name, id],
+        )
+        .map_err(|e| sql_err("rename_map", e))?;
+
+    if rows_affected == 0 {
+        return Err(format!("Map {} not found", id));
+    }
+
+    Ok(())
+}
+
+/// Delete a map and all data that belongs exclusively to it, in a single transaction.
+///
+/// The FK schema does not cascade from maps -> nodes, so this command handles
+/// the multi-step cleanup explicitly:
+///
+///   1. Collect all node IDs that have a layout row on this map.
+///   2. Delete all relationship rows whose source_id, target_id, OR rel_node_id
+///      is in that set (using the same three-column filter as delete_node_cascade).
+///   3. Delete companion relationship-nodes (node_type = 'relationship') that
+///      are referenced by those relationships and are not already in the collected
+///      node set (they would otherwise become orphan nodes with no layout).
+///   4. Delete the collected nodes deepest-first to satisfy ON DELETE RESTRICT
+///      on nodes.parent_id. Depth is computed via recursive CTE.
+///   5. Delete the map row itself. The layout rows cascade automatically via
+///      the layout.map_id -> maps(id) ON DELETE CASCADE FK.
+///
+/// Returns the ID of the deleted map.
+///
+/// Matches: `DbInterface.deleteMap(id)`
+#[tauri::command]
+pub fn delete_map(
+    state: tauri::State<'_, Mutex<Connection>>,
+    id: i64,
+) -> Result<i64, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    // ----------------------------------------------------------------
+    // 1. Verify the map exists and collect all node IDs on this map.
+    // ----------------------------------------------------------------
+    let map_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM maps WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|e| sql_err("delete_map check existence", e))?
+        > 0;
+
+    if !map_exists {
+        return Err(format!("Map {} not found", id));
+    }
+
+    let mut node_stmt = conn
+        .prepare("SELECT node_id FROM layout WHERE map_id = ?1")
+        .map_err(|e| sql_err("prepare delete_map node_ids", e))?;
+
+    let node_ids: Vec<i64> = node_stmt
+        .query_map(rusqlite::params![id], |row| row.get(0))
+        .map_err(|e| sql_err("query delete_map node_ids", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| sql_err("collect delete_map node_ids", e))?;
+
+    // ----------------------------------------------------------------
+    // Steps 2-5 run inside a single transaction.
+    // ----------------------------------------------------------------
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN delete_map", e))?;
+
+    let result = (|| -> Result<(), rusqlite::Error> {
+        if !node_ids.is_empty() {
+            // Build a placeholder list for the IN clause.
+            // Use unnumbered `?` so each occurrence is an independent binding
+            // position -- numbered `?N` would cause SQLite to reuse the same
+            // binding slot when the same N appears in multiple IN clauses.
+            let placeholders: String = node_ids
+                .iter()
+                .map(|_| "?".to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let params: Vec<rusqlite::types::Value> = node_ids
+                .iter()
+                .map(|nid| rusqlite::types::Value::Integer(*nid))
+                .collect();
+
+            // triple_params is used by queries that reference the node set in
+            // three separate IN clauses (source_id, target_id, rel_node_id).
+            // Each `?` is a distinct position, so we must supply 3×N values.
+            let triple_params: Vec<rusqlite::types::Value> = params
+                .iter()
+                .cloned()
+                .chain(params.iter().cloned())
+                .chain(params.iter().cloned())
+                .collect();
+
+            // 2. Collect companion rel_node_ids that are NOT already in the
+            //    node_ids set (those will be deleted in step 4 naturally).
+            let rel_query = format!(
+                "SELECT rel_node_id FROM relationships \
+                 WHERE (source_id IN ({p}) OR target_id IN ({p}) OR rel_node_id IN ({p})) \
+                 AND rel_node_id IS NOT NULL",
+                p = placeholders
+            );
+
+            let node_id_set: std::collections::HashSet<i64> =
+                node_ids.iter().cloned().collect();
+
+            let mut rel_stmt = conn.prepare(&rel_query)
+                .map_err(|e| {
+                    // Wrap as a rusqlite error so the closure return type is uniform.
+                    eprintln!("[db] delete_map prepare rel_query: {}", e);
+                    e
+                })?;
+
+            let companion_ids: Vec<i64> = rel_stmt
+                .query_map(rusqlite::params_from_iter(triple_params.iter()), |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|nid| !node_id_set.contains(nid))
+                .collect();
+
+            // 3. Delete relationship rows touching any node on this map.
+            let del_rel_query = format!(
+                "DELETE FROM relationships \
+                 WHERE source_id IN ({p}) OR target_id IN ({p}) OR rel_node_id IN ({p})",
+                p = placeholders
+            );
+            conn.execute(&del_rel_query, rusqlite::params_from_iter(triple_params.iter()))?;
+
+            // 4a. Delete companion nodes not in the primary node set.
+            for companion_id in &companion_ids {
+                conn.execute(
+                    "DELETE FROM nodes WHERE id = ?1",
+                    rusqlite::params![companion_id],
+                )?;
+            }
+
+            // 4b. Delete primary nodes deepest-first (topological order).
+            //     Build depth via recursive CTE for each root (nodes with
+            //     parent_id NOT IN the node set, i.e., top-level on this map).
+            //     We collect (id, depth) for all nodes in the set, sort
+            //     depth DESC, then delete one by one to satisfy RESTRICT.
+            //
+            //     For simplicity and correctness, run one CTE per root node
+            //     (nodes whose parent_id is NULL or outside the map's node set).
+            //     Collect all (id, depth) pairs, deduplicate, sort, delete.
+            let depth_query = format!(
+                "WITH RECURSIVE tree(id, depth) AS ( \
+                     SELECT id, 0 FROM nodes \
+                     WHERE id IN ({p}) \
+                       AND (parent_id IS NULL OR parent_id NOT IN ({p})) \
+                     UNION ALL \
+                     SELECT n.id, t.depth + 1 \
+                     FROM nodes n \
+                     JOIN tree t ON n.parent_id = t.id \
+                     WHERE n.id IN ({p}) \
+                 ) \
+                 SELECT id, depth FROM tree",
+                p = placeholders
+            );
+
+            let mut depth_stmt = conn.prepare(&depth_query)?;
+            let mut depth_pairs: Vec<(i64, i64)> = depth_stmt
+                .query_map(rusqlite::params_from_iter(triple_params.iter()), |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Sort deepest first; stable tiebreak by id DESC.
+            depth_pairs.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+
+            for (node_id, _depth) in &depth_pairs {
+                conn.execute(
+                    "DELETE FROM nodes WHERE id = ?1",
+                    rusqlite::params![node_id],
+                )?;
+            }
+        }
+
+        // 5. Delete the map row. Layout rows cascade automatically.
+        conn.execute("DELETE FROM maps WHERE id = ?1", rusqlite::params![id])?;
+
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT delete_map", e))?;
+            Ok(id)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(sql_err("delete_map transaction", e))
         }
     }
 }

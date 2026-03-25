@@ -103,6 +103,8 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
         "ALTER TABLE layout ADD COLUMN min_height REAL DEFAULT NULL",
         // Phase 2: relationship-as-node. Add rel_node_id to relationships.
         "ALTER TABLE relationships ADD COLUMN rel_node_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE",
+        // M4: scope relationships to a map so get_map_relationships can filter correctly.
+        "ALTER TABLE relationships ADD COLUMN map_id INTEGER REFERENCES maps(id) ON DELETE CASCADE",
     ] {
         if let Err(e) = conn.execute_batch(sql) {
             if !e.to_string().contains("duplicate column name") {
@@ -111,7 +113,27 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
         }
     }
 
-    // --- 4b. Rebuild nodes table to expand the node_type CHECK constraint ---
+    // --- 4b. Backfill relationships.map_id for rows created before M4. ---
+    // Infer the map from the source node's layout row. Under the M3 single-map
+    // invariant every node belongs to exactly one map, so LIMIT 1 is safe and
+    // unambiguous. Rows that still have map_id IS NULL after the backfill are
+    // true orphans with no layout entry; they are left as-is.
+    conn.execute_batch(
+        "UPDATE relationships \
+         SET map_id = ( \
+             SELECT l.map_id FROM layout l \
+             WHERE l.node_id = relationships.source_id \
+             LIMIT 1 \
+         ) \
+         WHERE map_id IS NULL;"
+    )?;
+
+    // Index to support the WHERE map_id = ? filter in get_map_relationships.
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_rel_map_id ON relationships(map_id);"
+    )?;
+
+    // --- 4c. Rebuild nodes table to expand the node_type CHECK constraint ---
     // SQLite cannot ALTER a CHECK constraint. The only safe path is a
     // table rebuild: rename -> recreate -> copy -> drop old.
     // We detect whether the rebuild is needed by checking if the current

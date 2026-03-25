@@ -1,6 +1,15 @@
 // The IPC interface contract for Plectica 2.0
 // Both the Tauri Rust backend (Silas) and the frontend (Wren) build against this.
 
+/**
+ * A map (canvas). Returned by createMap and getAllMaps.
+ * Fields mirror the Rust `MapData` struct.
+ */
+export interface MapData {
+  id: number
+  name: string
+}
+
 export interface NodeWithLayout {
   id: number
   parent_id: number | null
@@ -62,4 +71,18 @@ export interface DbInterface {
   reattachRelationship(id: number, newSourceId: number, newTargetId: number): Promise<void>
   flipRelationship(id: number): Promise<void>
   deleteRelationship(id: number): Promise<void>
+
+  // --- Map (canvas) management (M4) ---
+  /** Create a new map and return its id and name. */
+  createMap(name: string): Promise<MapData>
+  /** Return all maps ordered by creation time (oldest first). */
+  getAllMaps(): Promise<MapData[]>
+  /** Rename a map. */
+  renameMap(id: number, name: string): Promise<void>
+  /**
+   * Delete a map and all nodes, relationships, and layout rows that belong to it.
+   * The Rust command runs as a single transaction.
+   * Returns the id of the deleted map.
+   */
+  deleteMap(id: number): Promise<number>
 }
