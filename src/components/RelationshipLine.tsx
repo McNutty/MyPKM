@@ -40,7 +40,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import type { RelationshipData } from '../store/types'
 import { computeEdgePoint } from '../store/canvas-store'
 
-interface CardRect {
+export interface CardRect {
   x: number
   y: number
   width: number
@@ -60,7 +60,7 @@ interface CardRect {
  * midpoint perpendicular axis, so sliding the label parallel to the baseline
  * never warps the curve. The label's visual position is Bezier(t).
  */
-function decomposeRelationshipGeometry(
+export function decomposeRelationshipGeometry(
   sourcePos: CardRect,
   targetPos: CardRect,
   labelX: number,

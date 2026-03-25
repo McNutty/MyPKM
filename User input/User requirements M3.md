@@ -1,6 +1,6 @@
 # New issues (these should be moved to handled when taken care of)
 
-- I want to try a slightly different approach when it comes to moving arrow labels. I think I have identified what feels a bit off. The current implementation has the label fixed to the midpoint of the arrow, and this leads to some strange twisting when the label is moved too close to either of the endpoints. When the label is mostly midway between the endpoints, everything works and looks perfect. My thinking is that I would like to try to have the label "slide" along the arrow when it is moved, in addition to moving the arrow itself. I think this would alleviate the strange twisting. But at the same time, I don't want to break any movement functionality, I just want to get rid of the warping arrows when labels move to close to the endpoints.
+(none)
 
 # Handled issues (either solved in code or updated in documentation)
 
@@ -27,6 +27,9 @@
 
 - Connection anchor points appearing on hovered card and all ancestors simultaneously.
   - **Fixed:** Moved hover tracking from local Card state to App-level `hoveredCardId`. Hit-tests on every mousemove to find smallest card under cursor. Only that card receives `isHovered={true}`.
+
+- Label cards warp curve when dragged near endpoints; labels should "slide" along the arrow.
+  - **Fixed:** Decompose stored label position into t (along baseline, clamped 0.05-0.95) and d (perpendicular offset). Control point Q pinned to midpoint perpendicular — curve never warps. Visual label position = Bezier(t). Drag handler applies Newton-step correction so label tracks mouse.
 
 # Requirements testing
 
@@ -59,3 +62,5 @@
 	1. And it looks GLORIOUS!
 26. Two relationships between same cards -- independently positioned, no interference - OK!
 27. Double-click to edit opens at visual (on-curve) position - OK!
+28. Label stays under mouse during drag on curved arrows (no drift) - OK!
+	1. Better, but still a bit off close to the endpoints. But we'll call it good enough.

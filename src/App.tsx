@@ -41,7 +41,8 @@ import {
   MIN_H,
 } from './store/canvas-store'
 import { Card } from './components/Card'
-import { RelationshipOverlay } from './components/RelationshipLine'
+import { RelationshipOverlay, decomposeRelationshipGeometry } from './components/RelationshipLine'
+import type { CardRect } from './components/RelationshipLine'
 import { db } from './ipc'
 
 // ============================================================================
@@ -565,9 +566,35 @@ export default function App() {
         const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
         const newX = canvasX - relCardDragOffset.x
         const newY = canvasY - relCardDragOffset.y
+
+        // Correction: the stored position (newX, newY) is fed into
+        // decomposeRelationshipGeometry which returns a *visual* on-curve
+        // position that diverges from the raw position on curved arrows. We
+        // compute that divergence (error) and store a pre-corrected position
+        // so that the rendered visual lands exactly at the mouse.
+        const rel = relationshipsRef.current.find((r) => r.id === draggingRelCardId)
+        let correctedX = newX
+        let correctedY = newY
+        if (rel) {
+          const srcCard = cardsRef.current.get(rel.sourceId)
+          const tgtCard = cardsRef.current.get(rel.targetId)
+          if (srcCard && tgtCard) {
+            const srcAbs = getAbsolutePosition(cardsRef.current, rel.sourceId)
+            const tgtAbs = getAbsolutePosition(cardsRef.current, rel.targetId)
+            const sourceRect: CardRect = { x: srcAbs.x, y: srcAbs.y, width: srcCard.width, height: srcCard.height }
+            const targetRect: CardRect = { x: tgtAbs.x, y: tgtAbs.y, width: tgtCard.width, height: tgtCard.height }
+            const geom = decomposeRelationshipGeometry(sourceRect, targetRect, newX, newY)
+            // error = where the label would actually render minus where we want it
+            const errorX = geom.visualX - newX
+            const errorY = geom.visualY - newY
+            correctedX = newX - errorX
+            correctedY = newY - errorY
+          }
+        }
+
         setRelCardPositions((prev) => {
           const next = new Map(prev)
-          next.set(draggingRelCardId, { x: newX, y: newY })
+          next.set(draggingRelCardId, { x: correctedX, y: correctedY })
           return next
         })
         return
