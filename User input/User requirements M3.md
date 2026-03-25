@@ -22,6 +22,12 @@
 - Moving a parent card where children have curved relationship arrows -- labels don't move as expected.
   - **Fixed:** Label movement now collects all descendants of the dragged card and moves their relationship labels too. Both endpoints moving (sibling relationships) get full delta. `isAncestor` argument order was also corrected.
 
+- Relationship label text not saved on blur (clicking outside), only on Enter.
+  - **Fixed:** `EditInput` already had `onBlur={commit}`, but `handleCanvasMouseDown` and `handleSelectCard` were preemptively clearing `editingRelId` on mousedown, racing against blur. Removed those preemptive clears.
+
+- Connection anchor points appearing on hovered card and all ancestors simultaneously.
+  - **Fixed:** Moved hover tracking from local Card state to App-level `hoveredCardId`. Hit-tests on every mousemove to find smallest card under cursor. Only that card receives `isHovered={true}`.
+
 # Requirements testing
 
 1. Hover near a card edge -> connection handles appear (all nesting depths) - OK!
@@ -43,3 +49,5 @@
 17. Two relationships between same cards, labels opposite directions -> different edge exit/entry points - OK!
 18. Drag source/target so label passes near other card -> smooth movement without sticking - OK!
 19. Move parent card with children that have curved relationship arrows -> labels move correctly - OK!
+20. Edit relationship label, click outside -> text saves on blur (not just Enter) - OK!
+21. Hover nested cards -> only topmost card shows connection anchor points - OK!

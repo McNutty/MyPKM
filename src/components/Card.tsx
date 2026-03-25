@@ -51,6 +51,19 @@ interface CardProps {
   onConnectStart?: (cardId: number, e: React.MouseEvent) => void
   /** True while any connection drag is in progress (show drop-target glow) */
   isConnecting?: boolean
+  /**
+   * Whether this specific card is the topmost card under the cursor.
+   * Controlled by App-level hover hit-test so that only the smallest (most
+   * nested) card under the cursor shows connection handles -- not all ancestors.
+   */
+  isHovered?: boolean
+  /**
+   * The ID of whichever card the App-level hover hit-test has determined is
+   * currently under the cursor. Threaded down through the recursive tree so
+   * each child Card can compute its own isHovered without an extra prop per
+   * child at the App render site.
+   */
+  hoveredCardId?: number | null
 }
 
 export const Card: React.FC<CardProps> = React.memo(({
@@ -70,14 +83,14 @@ export const Card: React.FC<CardProps> = React.memo(({
   ghostZIndex,
   onConnectStart,
   isConnecting,
+  isHovered = false,
+  hoveredCardId = null,
 }) => {
   const children = getChildren(allCards, card.id)
   const isNestTarget = dragState?.nestTargetId === card.id
   const isSelected = selectedId === card.id
   const isDragging = dragState?.cardId === card.id
 
-  // Track whether this card is currently hovered for showing connection handles
-  const [isHovered, setIsHovered] = useState(false)
   // Issue 2: unified drop target -- this card is where the dragged card will land.
   // Either it's the explicit nest target (new parent on title-bar hover) or it's
   // the current parent of the dragged card (card stays here when released).
@@ -186,11 +199,6 @@ export const Card: React.FC<CardProps> = React.memo(({
 
   const handleRootMouseLeave = useCallback(() => {
     setIsInResizeZone(false)
-    setIsHovered(false)
-  }, [])
-
-  const handleRootMouseEnter = useCallback(() => {
-    setIsHovered(true)
   }, [])
 
   const handleConnectHandleMouseDown = useCallback(
@@ -252,7 +260,6 @@ export const Card: React.FC<CardProps> = React.memo(({
       onMouseDown={handleMouseDown}
       onMouseMove={handleRootMouseMove}
       onMouseLeave={handleRootMouseLeave}
-      onMouseEnter={handleRootMouseEnter}
     >
       {/* ------------------------------------------------------------------ */}
       {/* Header row -- ALWAYS visible. Contains the card's title/label.      */}
@@ -369,6 +376,8 @@ export const Card: React.FC<CardProps> = React.memo(({
               zoom={zoom}
               onConnectStart={onConnectStart}
               isConnecting={isConnecting}
+              hoveredCardId={hoveredCardId}
+              isHovered={hoveredCardId === child.id}
             />
           )
         })}

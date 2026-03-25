@@ -77,6 +77,11 @@ export default function App() {
   const [isPanning, setIsPanning] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Hover hit-test: ID of the smallest regular card under the cursor.
+  // Computed on every mousemove in handleMouseMove (App level) so that nested
+  // cards don't all show connection handles simultaneously -- only the topmost
+  // (smallest area) card at the cursor position is considered hovered.
+  const [hoveredCardId, setHoveredCardId] = useState<number | null>(null)
 
   // M3: Relationships
   const [relationships, setRelationships] = useState<RelationshipData[]>([])
@@ -277,7 +282,10 @@ export default function App() {
         // Left click on empty canvas or middle-mouse: start panning
         setSelectedId(null)
         setSelectedRelId(null)
-        setEditingRelId(null)
+        // Do NOT call setEditingRelId(null) here -- if the label EditInput is
+        // open, clicking the canvas steals focus, which fires onBlur on the
+        // input, which calls onCommit (saving the text) and clears editingRelId
+        // itself. Forcing it null here races against onBlur and can drop edits.
         setIsPanning(true)
         panStartRef.current = {
           x: e.clientX,
@@ -418,6 +426,37 @@ export default function App() {
     (e: React.MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
+
+      // --- HOVER HIT-TEST ---
+      // Runs on every mousemove to find the smallest regular card (non-relationship
+      // node) whose absolute bounds contain the cursor. This is the "topmost" card
+      // in nesting terms -- the most specific card at the cursor position. We set
+      // hoveredCardId at the App level rather than letting each Card track its own
+      // hover state, which was causing all ancestor cards to light up simultaneously.
+      // Lightweight: O(N) over cardsRef.current, no DOM queries.
+      {
+        const cursorCanvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+        const cursorCanvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+        let bestId: number | null = null
+        let bestArea = Infinity
+        for (const [id, candidate] of cardsRef.current) {
+          // cardsRef.current only contains regular cards (relationship companion
+          // nodes are never inserted into this map -- see load logic).
+          const absPos = getAbsolutePosition(cardsRef.current, id)
+          const area = candidate.width * candidate.height
+          if (
+            cursorCanvasX >= absPos.x &&
+            cursorCanvasX <= absPos.x + candidate.width &&
+            cursorCanvasY >= absPos.y &&
+            cursorCanvasY <= absPos.y + candidate.height &&
+            area < bestArea
+          ) {
+            bestId = id
+            bestArea = area
+          }
+        }
+        setHoveredCardId(bestId)
+      }
 
       // --- PENDING DRAG THRESHOLD CHECK ---
       // If a mousedown was recorded but we haven't started a real drag yet,
@@ -1574,7 +1613,9 @@ export default function App() {
   const handleSelectCard = useCallback((cardId: number) => {
     setSelectedId(cardId)
     setSelectedRelId(null)
-    setEditingRelId(null)
+    // Do NOT clear editingRelId here -- if the label EditInput is open, clicking
+    // a card fires onBlur on the input first, which commits and clears it. Forcing
+    // null here races against that blur and can drop the in-progress edit.
   }, [])
 
   // Issue 2: compute the single drop target ID for the current drag.
@@ -1722,6 +1763,7 @@ export default function App() {
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={() => setHoveredCardId(null)}
         onDoubleClick={handleDoubleClick}
       >
         {/* Loading overlay */}
@@ -1815,6 +1857,8 @@ export default function App() {
                 zoom={viewport.zoom}
                 onConnectStart={handleConnectStart}
                 isConnecting={connectingState !== null}
+                isHovered={hoveredCardId === card.id}
+                hoveredCardId={hoveredCardId}
               />
             )
           })}
@@ -1839,6 +1883,7 @@ export default function App() {
               onAutoFocusConsumed={() => setNewCardId(null)}
               zoom={viewport.zoom}
               ghostZIndex={10000}
+              isHovered={false}
             />
           )}
         </div>
