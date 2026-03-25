@@ -422,6 +422,154 @@ export function computeEdgePoint(
 }
 
 /**
+ * Push-mode: when Shift is held during drag, the dragged card pushes its
+ * siblings out of the way using pure min-penetration collision resolution.
+ *
+ * Algorithm:
+ * 1. The dragged card is already at its new position in the map.
+ * 2. Find siblings that overlap the dragged card, resolve each with
+ *    min-penetration (push along the axis with smaller overlap).
+ * 3. Cascade: pushed siblings may now overlap other siblings. Repeat
+ *    until no overlaps remain (max 20 iterations for safety).
+ * 4. Auto-resize the immediate parent; set its size floor.
+ * 5. Walk up ancestors: if an ancestor now overlaps its own siblings
+ *    after growing, push them with the same min-penetration logic.
+ *
+ * No drag direction. Pure min-penetration everywhere.
+ */
+export function applyPushMode(
+  cards: Map<number, CardData>,
+  draggedId: number,
+  _prevAbsX: number,
+  _prevAbsY: number,
+  _newAbsX: number,
+  _newAbsY: number,
+): Map<number, CardData> {
+  const dragged = cards.get(draggedId)
+  if (!dragged) return cards
+
+  let updated = new Map(cards)
+
+  // ---------------------------------------------------------------------------
+  // Min-penetration collision: push `sibling` out of `mover` along the axis
+  // with the smallest overlap. Returns new {x, y} for sibling, or null.
+  // ---------------------------------------------------------------------------
+  function resolvePush(mover: CardData, sibling: CardData): { x: number; y: number } | null {
+    const penR = (mover.x + mover.width) - sibling.x
+    const penL = (sibling.x + sibling.width) - mover.x
+    const penD = (mover.y + mover.height) - sibling.y
+    const penU = (sibling.y + sibling.height) - mover.y
+
+    if (penR <= 0 || penL <= 0 || penD <= 0 || penU <= 0) return null
+
+    const minX = Math.min(penR, penL)
+    const minY = Math.min(penD, penU)
+
+    if (minX <= minY) {
+      const pushX = penR <= penL ? penR : -penL
+      return { x: sibling.x + pushX, y: sibling.y }
+    } else {
+      const pushY = penD <= penU ? penD : -penU
+      return { x: sibling.x, y: sibling.y + pushY }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Push cascade at one nesting level: starting from `moverId`, push all
+  // overlapping siblings, then cascade until stable (max 20 iterations).
+  // ---------------------------------------------------------------------------
+  function pushCascade(state: Map<number, CardData>, moverId: number): Map<number, CardData> {
+    const result = new Map(state)
+    const moverCard = result.get(moverId)
+    if (!moverCard) return result
+
+    const parentId = moverCard.parentId
+    const visited = new Set<number>([moverId])
+    const queue = [moverId]
+    let iterations = 0
+
+    while (queue.length > 0 && iterations++ < 20) {
+      const currentId = queue.shift()!
+      const current = result.get(currentId)
+      if (!current) continue
+
+      for (const [id, card] of result) {
+        if (id === currentId || card.parentId !== parentId) continue
+        const resolved = resolvePush(current, card)
+        if (!resolved) continue
+
+        // Only clamp nested cards to PADDING (keeps them inside parent content area).
+        // Root-level cards (parentId === null) can be at any canvas position.
+        const clampedX = parentId !== null ? Math.max(PADDING, resolved.x) : resolved.x
+        const clampedY = parentId !== null ? Math.max(PADDING, resolved.y) : resolved.y
+        result.set(id, { ...card, x: clampedX, y: clampedY })
+
+        if (!visited.has(id)) {
+          visited.add(id)
+          queue.push(id)
+        }
+      }
+    }
+
+    return result
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 1: push siblings of the dragged card
+  // ---------------------------------------------------------------------------
+  updated = pushCascade(updated, draggedId)
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: auto-resize parent + ancestor push cascade
+  // ---------------------------------------------------------------------------
+  const card = updated.get(draggedId)
+  if (card && card.parentId !== null) {
+    const immediateParentId = card.parentId
+    const parentBefore = updated.get(immediateParentId)
+    const sizeBefore = parentBefore ? { w: parentBefore.width, h: parentBefore.height } : null
+
+    // Expand the parent (and ancestors) to contain children.
+    updated = autoResizeParent(updated, immediateParentId)
+
+    // Set size floor on immediate parent only (so it doesn't auto-shrink
+    // while the user is still dragging).
+    if (sizeBefore) {
+      const parentAfter = updated.get(immediateParentId)
+      if (parentAfter && (parentAfter.width > sizeBefore.w || parentAfter.height > sizeBefore.h)) {
+        updated.set(immediateParentId, {
+          ...parentAfter,
+          minWidth: parentAfter.width,
+          minHeight: parentAfter.height,
+        })
+      }
+    }
+
+    // Walk up ancestors: if an ancestor grew and now overlaps its siblings,
+    // push them. Stop when no changes occur.
+    let ancestorId: number | null = immediateParentId
+    while (ancestorId !== null) {
+      const ancestor = updated.get(ancestorId)
+      if (!ancestor) break
+
+      const before = new Map(updated)
+      updated = pushCascade(updated, ancestorId)
+
+      // Check if anything moved at this level.
+      let changed = false
+      for (const [id, c] of updated) {
+        const prev = before.get(id)
+        if (!prev || prev.x !== c.x || prev.y !== c.y) { changed = true; break }
+      }
+      if (!changed) break
+
+      ancestorId = ancestor.parentId
+    }
+  }
+
+  return updated
+}
+
+/**
  * Convert a canvas-space position to a position relative to a target parent's
  * content area.
  */

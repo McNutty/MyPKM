@@ -34,6 +34,7 @@ import {
   normalizeChildPositions,
   computeStackedPosition,
   computeEdgePoint,
+  applyPushMode,
   PADDING,
   BOTTOM_PADDING,
   HEADER_HEIGHT,
@@ -149,6 +150,16 @@ export default function App() {
     startClientY: number
     cardRect: DOMRect | null
   } | null>(null)
+
+  // Tracks whether Shift is held during the current drag frame. Updated from
+  // e.shiftKey on every mousemove. A ref (not state) so it doesn't cause
+  // re-renders when the user taps Shift mid-drag.
+  const shiftHeldDuringDragRef = useRef(false)
+
+  // Snapshot of cards state captured at the moment a card drag is promoted from
+  // pendingDrag. Used by handleMouseUp to diff against the final state and
+  // persist all cards that moved (including pushed siblings in pushing mode).
+  const dragStartCardsRef = useRef<Map<number, CardData> | null>(null)
 
   // Last known mouse position in screen space (clientX/clientY), for keyboard shortcuts
   // that need to know where the cursor is (e.g. "C" to create card at cursor).
@@ -655,6 +666,9 @@ export default function App() {
           absX: absPos.x,
           absY: absPos.y,
         })
+        // Snapshot cards at drag start so handleMouseUp can detect all changes
+        // (including pushed siblings in pushing mode) relative to pre-drag state.
+        dragStartCardsRef.current = new Map(cardsRef.current)
         // Fall through: the dragging section below will process the first drag
         // frame on this same event, using the dragState we just set. But since
         // setDragState is async, we return here and let the next mousemove
@@ -960,10 +974,14 @@ export default function App() {
         }
       }
 
+      // Track whether Shift is held this frame. The ref updates mid-drag so
+      // pushing mode can be toggled on/off without interrupting the drag.
+      shiftHeldDuringDragRef.current = e.shiftKey
+
       // Update card position (local coords relative to current parent).
-      // No autoResizeParent here -- parent resize fires once on mouse-up, not
-      // on every frame. Firing it during drag caused the parent to chase the
-      // card and made it visually impossible to drag a child outside its parent.
+      // No autoResizeParent here for normal drags -- parent resize fires once on
+      // mouse-up. Exception: pushing mode calls autoResizeParent inside
+      // applyPushMode so pushed cards that hit the right/bottom edge expand the parent.
       setCards((prev) => {
         const updated = new Map(prev)
         const c = updated.get(dragState.cardId)
@@ -971,6 +989,22 @@ export default function App() {
 
         const localPos = canvasToLocal(updated, newAbsX, newAbsY, c.parentId)
         updated.set(dragState.cardId, { ...c, x: localPos.x, y: localPos.y })
+
+        // Pushing mode: shift held, collision cascade + parent auto-resize.
+        // Always call applyPushMode even with zero siblings -- a lone child
+        // dragged to the edge must still trigger autoResizeParent to expand
+        // the parent container.
+        if (shiftHeldDuringDragRef.current) {
+          return applyPushMode(
+            updated,
+            dragState.cardId,
+            dragState.absX,  // prevAbsX
+            dragState.absY,  // prevAbsY
+            newAbsX,
+            newAbsY,
+          )
+        }
+
         return updated
       })
     },
@@ -1244,7 +1278,10 @@ export default function App() {
           const nodes = await db.getMapNodes(1)
           const raw = new Map<number, CardData>()
           for (const node of nodes) {
-            raw.set(node.id, nodeWithLayoutToCardData(node, 0))
+            // Filter out relationship backing nodes, same as the primary load path.
+            if (node.node_type !== 'relationship') {
+              raw.set(node.id, nodeWithLayoutToCardData(node, 0))
+            }
           }
           setCards(computeDepths(raw))
         } catch (fetchErr) {
@@ -1492,20 +1529,30 @@ export default function App() {
     // shifts any children that ended up with negative coords back to the
     // padding boundary; then autoResizeParent can see the correct bounding box
     // and grow rightward/downward to contain them.
-    const finalCard = cardsRef.current.get(cardId)
+    //
+    // Pushing mode: applyPushMode runs autoResizeParent during drag for right/bottom
+    // expansions, but we still run normalizeChildPositions here on mouseup to catch
+    // any left/top boundary cleanup. The dragStartCardsRef snapshot (taken when the
+    // drag was promoted) is used as the baseline for the persist diff so that pushed
+    // siblings are included in the DB writes.
+    const preMouseUpCards = cardsRef.current
+    const dragStartSnapshot = dragStartCardsRef.current
+    dragStartCardsRef.current = null
+
+    const finalCard = preMouseUpCards.get(cardId)
     if (finalCard) {
       if (finalCard.parentId !== null) {
         // normalizeChildPositions may shift children; feed its result into
         // autoResizeParent so the two operations see a consistent state.
-        const afterNorm = normalizeChildPositions(cardsRef.current, finalCard.parentId)
+        const afterNorm = normalizeChildPositions(preMouseUpCards, finalCard.parentId)
         const afterResize = autoResizeParent(afterNorm, finalCard.parentId)
         const parentAfter = afterResize.get(finalCard.parentId)
-        const parentBefore = cardsRef.current.get(finalCard.parentId)
+        const parentBefore = preMouseUpCards.get(finalCard.parentId)
 
         // Determine which cards actually changed so we only write what changed.
         // normalizeChildPositions may have shifted children (left/up overflow fix),
         // and autoResizeParent may have grown the parent -- either or both may apply.
-        const normChanged = afterNorm !== cardsRef.current
+        const normChanged = afterNorm !== preMouseUpCards
         const resizeChanged =
           parentAfter &&
           parentBefore &&
@@ -1514,11 +1561,12 @@ export default function App() {
         if (normChanged || resizeChanged) {
           setCards(afterResize)
 
-          // Persist all affected cards. Collect cards that differ from the
-          // pre-drag snapshot so we don't over-write cards that didn't move.
+          // Persist all cards that differ from the pre-drag snapshot (covers
+          // pushed siblings in pushing mode) AND cards changed by normalize/resize.
+          const baseline = dragStartSnapshot ?? preMouseUpCards
           const writes: Promise<void>[] = []
           for (const [id, card] of afterResize) {
-            const before = cardsRef.current.get(id)
+            const before = baseline.get(id)
             if (
               !before ||
               card.x !== before.x ||
@@ -1545,13 +1593,39 @@ export default function App() {
         }
       }
 
-      // No parent changes needed (or card is top-level) -- just persist the card.
-      try {
-        await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height, finalCard.minWidth, finalCard.minHeight)
-        setError(null)
-      } catch (err) {
-        console.error('[App] Failed to persist drag position (layout-only):', err)
-        setError('Failed to save position.')
+      // No parent-level normalize/resize needed (or card is top-level).
+      // Still need to persist any cards that moved (dragged card + pushed siblings).
+      const baseline = dragStartSnapshot ?? preMouseUpCards
+      const writes: Promise<void>[] = []
+      for (const [id, card] of preMouseUpCards) {
+        const before = baseline.get(id)
+        if (
+          !before ||
+          card.x !== before.x ||
+          card.y !== before.y ||
+          card.width !== before.width ||
+          card.height !== before.height
+        ) {
+          writes.push(db.updateNodeLayout(id, 1, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
+        }
+      }
+      if (writes.length > 0) {
+        try {
+          await Promise.all(writes)
+          setError(null)
+        } catch (err) {
+          console.error('[App] Failed to persist drag position (layout-only):', err)
+          setError('Failed to save position.')
+        }
+      } else {
+        // Fallback: just persist the dragged card if the snapshot was unavailable.
+        try {
+          await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height, finalCard.minWidth, finalCard.minHeight)
+          setError(null)
+        } catch (err) {
+          console.error('[App] Failed to persist drag position (layout-only fallback):', err)
+          setError('Failed to save position.')
+        }
       }
 
       // Persist relationship label positions for the dragged card and all its

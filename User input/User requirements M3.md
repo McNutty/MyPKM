@@ -1,9 +1,12 @@
 # New issues (these should be moved to handled when taken care of)
 
-- Re-attaching relationship ends. With an arrow selected, you should be able to drag the ends to new cards.
-- I want the card resizing only to be available when hovering over the lower right corner (where the indicator is), not along the whole lower and right borders. Right now I too often end up resizing when I want to move a card.
-- Hide the empty label when the arrow is not selected. It should only display the dotted line when not selected. The tradeoff being that you need to select the line in order to modify the curvature, since you need the label for that. Or maybe instead reveal it on hover instead of selection? Yes, this would be best.
-- Shift+Scrollwheel should pan left and right. Scroll up for left and down for right.
+- Still thinking about this, ignore for now!
+	- Hide the empty label when the arrow is not selected. It should only display the dotted line when not selected. The tradeoff being that you need to select the line in order to modify the curvature, since you need the label for that. Or maybe instead reveal it on hover instead of selection? Yes, this would be best.
+- Still thinking about this, ignore for now!
+	- Add some sort of card alignment choice. A double click aligns all cards according to alignment choice. List, column and no alignment. A resized card gets "no alignment". A double click then works as now.
+- Modify the "parent double-click" resizing functionality by adding a top-left alignment of all children cards before resizing. Should also activate when dropping a card on an empty card. It should move all cards to the top left before resizing the parent. The relative positions of all cards should be unchanged, but the top margin to the card highest up, and the left margin to the leftmost card should be the same as the new right- and bottom margins after resizing the parent. It will have the effect of "centering" the contents on double click. Actually, an easier way of explaining might be to say that the end result of a double click should be that the margins between the content and **all** borders should be the same as the right/bottom margins after a current double click. "Fit-to-contents" is a good name!
+- ~~Pushing Mode~~ — Moved to Handled.
+- We still have some issue with size persistence I've noticed. My tests show that when a child is manually resized but not the parent, the parent shrinks a bit upon restart so the resized child might "stick out".
 
 # Handled issues (either solved in code or updated in documentation)
 
@@ -45,6 +48,18 @@
 
 - Label cards warp curve when dragged near endpoints; labels should "slide" along the arrow.
   - **Fixed:** Decompose stored label position into t (along baseline, clamped 0.05-0.95) and d (perpendicular offset). Control point Q pinned to midpoint perpendicular — curve never warps. Visual label position = Bezier(t). Drag handler applies Newton-step correction so label tracks mouse.
+
+- Re-attaching relationship endpoints by dragging arrow ends to new cards.
+  - **Fixed:** When a relationship is selected, draggable handles appear at both endpoints (open circle = source, filled = target). Dragging a handle shows a ghost line; releasing over a card rewires that end via new `reattach_relationship` Rust command. Self-loops rejected. Label position preserved.
+
+- Resize zone too large — resizing triggered from entire right/bottom border instead of just corner.
+  - **Fixed:** Resize hit detection changed from `nearRight || nearBottom` to `nearRight && nearBottom` in both Card.tsx (cursor feedback) and App.tsx (drag promotion). Now only the 16×16 corner square triggers resize.
+
+- Shift+Scrollwheel for horizontal panning.
+  - **Fixed:** Added Shift+wheel branch in `handleWheel`. `deltaY` applied to `panX` when Shift is held without Ctrl. Scroll up = pan left, scroll down = pan right.
+
+- Pushing Mode: Hold Shift while dragging to push sibling cards out of the way. Cascading collisions, parent auto-expansion, ancestor cascade.
+  - **Fixed:** `applyPushMode` in `canvas-store.ts` uses pure AABB min-penetration collision resolution with BFS cascade. `pushCascade` resolves sibling overlaps iteratively (max 20 passes). Parent extends right/down via `autoResizeParent`; immediate parent gets `minWidth`/`minHeight` floor. Ancestor expansion cascades upward — if a parent grows and overlaps its own siblings, they get pushed too. Nested cards clamped to PADDING; root-level cards push freely in all directions. Shift toggle mid-drag via `shiftHeldDuringDragRef`. Single-child parent expansion works (sibling guard removed). Error-recovery path now filters relationship backing nodes.
 
 # Requirements testing
 
@@ -101,3 +116,14 @@
 46. Select an arrow, drag the target handle to a different card -> relationship rewires - OK!
 47. Re-attach cancels when released on empty canvas - OK!
 48. Re-attach rejects self-loops (source === target) - OK!
+49. Shift+Drag a card into a sibling -> sibling gets pushed in the drag direction - OK!
+50. Shift+Drag a card into a sibling directly on the canvas - OK!
+51. Pushing cascades: pushed card pushes further cards it collides with (including parent siblings) - OK!
+52. Pushed cards stop at left/top boundary of parent (or canvas edge for root cards) - OK!
+53. Dragged card overlaps when a pushed card hits a wall (accepted behavior for now)
+54. Parent extends right/down when pushed cards reach the border (immediate parent size remembered) - OK!
+55. Release Shift mid-drag -> pushing stops, normal drag resumes - OK!
+56. Press Shift mid-drag -> pushing activates without jump/snap - OK!
+57. Pushing mode does not interfere with Shift+Scroll horizontal panning - OK!
+58. Regular drag (no Shift) still works exactly as before - OK!
+59. All pushed card positions persist after mouse-up and reload - OK!

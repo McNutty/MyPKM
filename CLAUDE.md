@@ -11,7 +11,16 @@ You **never** carry out work directly. You **always** delegate to the right AI t
 ## Folder Structure
 
 - `docs/` -- Project documentation (roadmap, specs, schema docs, reviews)
-- `src/` -- Plectica 2.0 source code (canvas app -- coming soon)
+- `src/` -- **Plectica 2.0 source code (the live app).** This is what `npx @tauri-apps/cli dev` serves.
+  - `src/App.tsx` -- Main canvas app (drag, resize, pan/zoom, nesting, pushing mode, mouse handlers)
+  - `src/components/Card.tsx` -- Card component (rendering, edit mode, resize cursor, connection handles)
+  - `src/components/RelationshipLine.tsx` -- SVG relationship arrows with draggable label cards
+  - `src/store/canvas-store.ts` -- All spatial helpers (autoResizeParent, getChildren, canvasToLocal, applyPushMode, etc.)
+  - `src/store/types.ts` -- Type definitions (CardData, Relationship, DragState, etc.)
+  - `src/ipc/` -- Tauri IPC bridge to SQLite backend (db.ts, db-tauri.ts, db-stub.ts)
+  - `src/main.tsx` -- React entry point
+- `src-tauri/` -- Tauri/Rust backend (SQLite commands, schema migrations)
+- `src/prototype/` -- Old prototypes (tldraw-nested, custom-react-canvas). **Not the live app -- do not edit these.**
 - `data/` -- Database files (`init_schema.sql`). Note: `pkm.db` is gitignored.
 - `team/` -- Team roster
 - `poc/` -- Proof-of-concept code (original PKM Flask app -- may be replaced)
