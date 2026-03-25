@@ -11,17 +11,26 @@
  *   Selected:   blue (#1976d2), slightly thicker
  *   Unlabeled:  dashed, faded (#aaa), italic "unlabeled" placeholder
  *
- * Curve geometry:
- *   The path is a quadratic Bezier: M start Q controlPt end
- *   For a quadratic Bezier, the point on the curve at t=0.5 is:
- *     P(0.5) = 0.25*start + 0.5*Q + 0.25*end
- *   We want the curve to pass through the card center at t=0.5, so we solve
- *   for Q given the desired midpoint (cardPos):
- *     Q = 2*cardPos - 0.5*start - 0.5*end
- *   This keeps the label visually on the arrow rather than floating above it.
- *   When the card is at the computed midpoint (no user offset), the Bezier
- *   control point lies on the line between start and end and the curve is
- *   a straight line, as expected.
+ * Curve geometry (sliding labels):
+ *   The stored label position P is decomposed into two independent parameters:
+ *     t  -- how far along the start->end baseline (clamped 0.05-0.95)
+ *     d  -- perpendicular distance from the baseline midpoint
+ *   The Bezier control point Q is always derived from d at the midpoint
+ *   perpendicular, so moving the label parallel to the baseline ("sliding")
+ *   never distorts the curve shape. The visual label position is Bezier(t).
+ *
+ *   Math:
+ *     M = (start + end) / 2
+ *     D = end - start,  len = |D|
+ *     N = (-Dy/len, Dx/len)          // perpendicular unit normal
+ *     t = clamp(dot(P-start,D) / dot(D,D), 0.05, 0.95)
+ *     d = dot(P - M, N)
+ *     Q = M + 2*d*N                  // control point, always at midpoint perp
+ *     visual = Bezier(t) using Q
+ *
+ *   At t=0.5 with label at midpoint perpendicular this is identical to the
+ *   previous behavior. When label is dragged near an endpoint, t clamps and
+ *   the curve shape stays clean.
  *
  * A wide transparent hit-area path (12px) sits behind the visible path to
  * make clicking the curve easy without requiring pixel-perfect aim.
@@ -39,16 +48,115 @@ interface CardRect {
 }
 
 // ============================================================================
+// decomposeRelationshipGeometry
+// ============================================================================
+
+/**
+ * Pure geometry helper. Given source/target card rects and a raw stored label
+ * position P (absolute canvas space), returns all geometry needed to render
+ * the Bezier curve and position the visual label.
+ *
+ * The key insight: Q (the Bezier control point) is always pinned to the
+ * midpoint perpendicular axis, so sliding the label parallel to the baseline
+ * never warps the curve. The label's visual position is Bezier(t).
+ */
+function decomposeRelationshipGeometry(
+  sourcePos: CardRect,
+  targetPos: CardRect,
+  labelX: number,
+  labelY: number,
+): {
+  start: { x: number; y: number }
+  end: { x: number; y: number }
+  ctrlX: number
+  ctrlY: number
+  visualX: number
+  visualY: number
+} {
+  const sourceCenter = {
+    x: sourcePos.x + sourcePos.width / 2,
+    y: sourcePos.y + sourcePos.height / 2,
+  }
+  const targetCenter = {
+    x: targetPos.x + targetPos.width / 2,
+    y: targetPos.y + targetPos.height / 2,
+  }
+
+  // Edge points: aim toward the stored label position so two relationships
+  // between the same pair of cards exit at different points when their labels
+  // are pulled in different directions.
+  const labelPos = { x: labelX, y: labelY }
+  const start = computeEdgePoint(
+    sourceCenter,
+    labelPos,
+    { x: sourcePos.x, y: sourcePos.y, w: sourcePos.width, h: sourcePos.height },
+  )
+  const end = computeEdgePoint(
+    targetCenter,
+    labelPos,
+    { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height },
+  )
+
+  // Baseline vector
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const lenSq = dx * dx + dy * dy
+
+  // Degenerate case: source and target are essentially at the same point
+  // (e.g. a card connected to itself). Fall back to the original formula.
+  if (lenSq < 1) {
+    const ctrlX = 2 * labelX - 0.5 * start.x - 0.5 * end.x
+    const ctrlY = 2 * labelY - 0.5 * start.y - 0.5 * end.y
+    return { start, end, ctrlX, ctrlY, visualX: labelX, visualY: labelY }
+  }
+
+  const len = Math.sqrt(lenSq)
+
+  // Midpoint M
+  const mx = (start.x + end.x) / 2
+  const my = (start.y + end.y) / 2
+
+  // Perpendicular unit normal N = (-dy/len, dx/len)
+  const nx = -dy / len
+  const ny = dx / len
+
+  // Decompose label position P into (t, d)
+  //   t = dot(P - start, D) / dot(D, D)   -- parallel component (0..1 along baseline)
+  //   d = dot(P - M, N)                    -- perpendicular offset from midpoint
+  const px = labelX - start.x
+  const py = labelY - start.y
+  const tRaw = (px * dx + py * dy) / lenSq
+  const t = Math.max(0.05, Math.min(0.95, tRaw))
+
+  const qx = labelX - mx
+  const qy = labelY - my
+  const d = qx * nx + qy * ny
+
+  // Control point: always at midpoint perpendicular regardless of t
+  const ctrlX = mx + 2 * d * nx
+  const ctrlY = my + 2 * d * ny
+
+  // Visual label position: evaluate quadratic Bezier at t
+  const u = 1 - t
+  const visualX = u * u * start.x + 2 * u * t * ctrlX + t * t * end.x
+  const visualY = u * u * start.y + 2 * u * t * ctrlY + t * t * end.y
+
+  return { start, end, ctrlX, ctrlY, visualX, visualY }
+}
+
+// ============================================================================
 // RelationshipLine
 // ============================================================================
 
 interface RelationshipLineProps {
   rel: RelationshipData
-  sourcePos: CardRect
-  targetPos: CardRect
-  /** Absolute canvas-space position of the relationship card (control point) */
-  cardX: number
-  cardY: number
+  /** Pre-computed start edge point (absolute canvas space) */
+  start: { x: number; y: number }
+  /** Pre-computed end edge point (absolute canvas space) */
+  end: { x: number; y: number }
+  /** Pre-computed Bezier control point */
+  ctrlX: number
+  ctrlY: number
   isSelected: boolean
   /**
    * Whether this line's label is currently being edited.
@@ -62,10 +170,10 @@ interface RelationshipLineProps {
 
 export const RelationshipLine: React.FC<RelationshipLineProps> = ({
   rel,
-  sourcePos,
-  targetPos,
-  cardX,
-  cardY,
+  start,
+  end,
+  ctrlX,
+  ctrlY,
   isSelected,
   isEditing,
   onSelect,
@@ -73,43 +181,7 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
 }) => {
   const isUnlabeled = rel.action === ''
 
-  // Compute edge-to-edge endpoints by aiming toward the relationship label card
-  // position rather than the opposite card's center. The Bezier curve goes
-  // source -> labelCard -> target, so the arrow should exit/enter each card
-  // in the direction of the label card. This means two relationships between
-  // the same pair of cards exit at different points when their label cards are
-  // pulled in different directions. When the label card sits at the geometric
-  // midpoint (default), this is nearly identical to center-to-center aiming.
-  const sourceCenter = {
-    x: sourcePos.x + sourcePos.width / 2,
-    y: sourcePos.y + sourcePos.height / 2,
-  }
-  const targetCenter = {
-    x: targetPos.x + targetPos.width / 2,
-    y: targetPos.y + targetPos.height / 2,
-  }
-
-  // Label card position as the aim target for both edge points.
-  const labelCardPos = { x: cardX, y: cardY }
-
-  const start = computeEdgePoint(
-    sourceCenter,
-    labelCardPos,
-    { x: sourcePos.x, y: sourcePos.y, w: sourcePos.width, h: sourcePos.height }
-  )
-  const end = computeEdgePoint(
-    targetCenter,
-    labelCardPos,
-    { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height }
-  )
-
-  // Compute the Bezier control point such that the curve passes through the
-  // card center at t=0.5. For a quadratic Bezier, P(0.5) = 0.25*start +
-  // 0.5*Q + 0.25*end. Solving for Q given the desired curve point (cardX, cardY):
-  //   Q = 2*(cardX,cardY) - 0.5*start - 0.5*end
-  // This keeps the label sitting on the arrow, not floating above it.
-  const ctrlX = 2 * cardX - 0.5 * start.x - 0.5 * end.x
-  const ctrlY = 2 * cardY - 0.5 * start.y - 0.5 * end.y
+  // Build the quadratic Bezier path from pre-computed geometry
   const pathD = `M ${start.x} ${start.y} Q ${ctrlX} ${ctrlY} ${end.x} ${end.y}`
 
   // Visual style
@@ -185,7 +257,7 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
 
 /**
  * RelationshipCard -- the HTML label element that sits on top of the SVG curve
- * at the user-dragged position (or the computed midpoint when never dragged).
+ * at the visual (on-curve) position returned by decomposeRelationshipGeometry.
  * Rendered by RelationshipOverlay as a sibling of the SVG, positioned
  * absolutely in the same canvas-transform coordinate space.
  *
@@ -193,9 +265,9 @@ export const RelationshipLine: React.FC<RelationshipLineProps> = ({
  */
 interface RelationshipCardProps {
   rel: RelationshipData
-  /** Absolute canvas-space X of the card center */
+  /** Absolute canvas-space X of the visual label position (on the Bezier curve) */
   cardX: number
-  /** Absolute canvas-space Y of the card center */
+  /** Absolute canvas-space Y of the visual label position (on the Bezier curve) */
   cardY: number
   isSelected: boolean
   isEditing: boolean
@@ -338,11 +410,13 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
   // (e.g. after a delete that hasn't yet persisted).
   type LineData = {
     rel: RelationshipData
-    sourcePos: CardRect
-    targetPos: CardRect
-    /** Absolute canvas position of the relationship card / Bezier control point */
-    cardX: number
-    cardY: number
+    start: { x: number; y: number }
+    end: { x: number; y: number }
+    ctrlX: number
+    ctrlY: number
+    /** Visual (on-curve) label position -- where the card div and edit input sit */
+    visualX: number
+    visualY: number
   }
 
   const lines: LineData[] = []
@@ -361,17 +435,28 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
     // relationship card position (falls back to this when no user offset exists).
     const srcCenter = { x: srcAbs.x + srcCard.width / 2, y: srcAbs.y + srcCard.height / 2 }
     const tgtCenter = { x: tgtAbs.x + tgtCard.width / 2, y: tgtAbs.y + tgtCard.height / 2 }
-    const start = computeEdgePoint(srcCenter, tgtCenter, { x: sourcePos.x, y: sourcePos.y, w: sourcePos.width, h: sourcePos.height })
-    const end = computeEdgePoint(tgtCenter, srcCenter, { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height })
-    const defaultMidX = (start.x + end.x) / 2
-    const defaultMidY = (start.y + end.y) / 2
+    const defaultStart = computeEdgePoint(srcCenter, tgtCenter, { x: sourcePos.x, y: sourcePos.y, w: sourcePos.width, h: sourcePos.height })
+    const defaultEnd = computeEdgePoint(tgtCenter, srcCenter, { x: targetPos.x, y: targetPos.y, w: targetPos.width, h: targetPos.height })
+    const defaultMidX = (defaultStart.x + defaultEnd.x) / 2
+    const defaultMidY = (defaultStart.y + defaultEnd.y) / 2
 
     // Use stored position if available and non-zero; otherwise fall back to midpoint.
     const stored = relCardPositions.get(rel.id)
-    const cardX = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.x : defaultMidX
-    const cardY = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.y : defaultMidY
+    const labelX = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.x : defaultMidX
+    const labelY = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.y : defaultMidY
 
-    lines.push({ rel, sourcePos, targetPos, cardX, cardY })
+    // Decompose raw label position into stable curve geometry + on-curve visual position
+    const geom = decomposeRelationshipGeometry(sourcePos, targetPos, labelX, labelY)
+
+    lines.push({
+      rel,
+      start: geom.start,
+      end: geom.end,
+      ctrlX: geom.ctrlX,
+      ctrlY: geom.ctrlY,
+      visualX: geom.visualX,
+      visualY: geom.visualY,
+    })
   }
 
   // Find the line being edited so we can render the input overlay
@@ -395,14 +480,14 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
           zIndex: 1,             // Above cards' z=depth but below ghosts (z=10000)
         }}
       >
-        {lines.map(({ rel, sourcePos, targetPos, cardX, cardY }) => (
+        {lines.map(({ rel, start, end, ctrlX, ctrlY }) => (
           <RelationshipLine
             key={rel.id}
             rel={rel}
-            sourcePos={sourcePos}
-            targetPos={targetPos}
-            cardX={cardX}
-            cardY={cardY}
+            start={start}
+            end={end}
+            ctrlX={ctrlX}
+            ctrlY={ctrlY}
             isSelected={selectedRelId === rel.id}
             isEditing={editingRelId === rel.id}
             onSelect={onSelectRel}
@@ -435,14 +520,14 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
       </svg>
 
       {/* Relationship label cards -- one HTML div per relationship, positioned
-          at the card position (user-dragged or midpoint). Rendered outside the
-          SVG so they get proper z-stacking and click/keyboard handling. */}
-      {lines.map(({ rel, cardX, cardY }) => (
+          at the visual (on-curve) position. Rendered outside the SVG so they
+          get proper z-stacking and click/keyboard handling. */}
+      {lines.map(({ rel, visualX, visualY }) => (
         <RelationshipCard
           key={rel.id}
           rel={rel}
-          cardX={cardX}
-          cardY={cardY}
+          cardX={visualX}
+          cardY={visualY}
           isSelected={selectedRelId === rel.id}
           isEditing={editingRelId === rel.id}
           onSelect={onSelectRel}
@@ -452,14 +537,15 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
       ))}
 
       {/* Inline label editor -- rendered as an HTML element positioned at the
-          card position so it gets proper focus/keyboard handling. The transform
-          must match the canvas zoom/pan applied by the parent transform div. */}
+          visual (on-curve) position so it gets proper focus/keyboard handling.
+          The transform must match the canvas zoom/pan applied by the parent
+          transform div. */}
       {editingLine && (
         <EditInput
           key={editingLine.rel.id}
           rel={editingLine.rel}
-          midX={editingLine.cardX}
-          midY={editingLine.cardY}
+          midX={editingLine.visualX}
+          midY={editingLine.visualY}
           onCommit={onLabelCommit}
           onCancel={onEditCancel}
         />

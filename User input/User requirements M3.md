@@ -1,6 +1,6 @@
 # New issues (these should be moved to handled when taken care of)
 
-(none)
+- I want to try a slightly different approach when it comes to moving arrow labels. I think I have identified what feels a bit off. The current implementation has the label fixed to the midpoint of the arrow, and this leads to some strange twisting when the label is moved too close to either of the endpoints. When the label is mostly midway between the endpoints, everything works and looks perfect. My thinking is that I would like to try to have the label "slide" along the arrow when it is moved, in addition to moving the arrow itself. I think this would alleviate the strange twisting. But at the same time, I don't want to break any movement functionality, I just want to get rid of the warping arrows when labels move to close to the endpoints.
 
 # Handled issues (either solved in code or updated in documentation)
 
@@ -51,3 +51,11 @@
 19. Move parent card with children that have curved relationship arrows -> labels move correctly - OK!
 20. Edit relationship label, click outside -> text saves on blur (not just Enter) - OK!
 21. Hover nested cards -> only topmost card shows connection anchor points - OK!
+22. Default (never-dragged) labels render at midpoint of straight line -- same as before - OK!
+23. Perpendicular drag bends the curve -- same feel as before - OK!
+24. Parallel drag slides label along curve without changing curvature
+	1. Yes, this is really nice. I just have one small comment. The more curved the arrow is, the more the label moves away from the mouse pointer when sliding. Not a super big deal, but it would be even better if the label always was connected to the mouse pointer, i.e it should feel as if it is the label you're moving, and the curvature of the arrow adjusts accordingly. The current behavior also makes it hard to perform this exact test.
+25. Labels near endpoints -- NO curve warping - OK!
+	1. And it looks GLORIOUS!
+26. Two relationships between same cards -- independently positioned, no interference - OK!
+27. Double-click to edit opens at visual (on-curve) position - OK!
