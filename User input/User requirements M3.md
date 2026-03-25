@@ -127,3 +127,8 @@
 57. Pushing mode does not interfere with Shift+Scroll horizontal panning - OK!
 58. Regular drag (no Shift) still works exactly as before - OK!
 59. All pushed card positions persist after mouse-up and reload - OK!
+60. Double-click parent card -> children shift to equal margins on all sides, parent shrinks to fit - OK!
+61. Double-click parent card -> size floor (minWidth/minHeight) is cleared - OK!
+62. Double-click parent card -> relative positions of children to each other are preserved - OK!
+63. Drop a card onto an empty card -> fit-to-contents applied automatically - OK!
+64. Double-click leaf card -> still resets to default size (no regression) - OK!

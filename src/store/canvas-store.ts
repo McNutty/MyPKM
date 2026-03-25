@@ -22,7 +22,7 @@
 import type { CardData } from './types'
 import type { NodeWithLayout } from '../ipc'
 
-export const PADDING = 16
+export const PADDING = 24
 export const BOTTOM_PADDING = 20  // Extra bottom buffer so children never clip the parent border
 export const HEADER_HEIGHT = 28
 export const MIN_W = 100
@@ -248,6 +248,68 @@ export function autoResizeParent(
 
     currentParentId = parent.parentId
   }
+
+  return updated
+}
+
+/**
+ * Fit a parent card tightly around its children with equal margins on all four
+ * sides. The margin on every side is PADDING (same as the right/bottom margin
+ * that autoResizeParent would produce after an expansion).
+ *
+ * Algorithm:
+ * 1. Find the bounding box of all direct children (local coords).
+ * 2. Shift every child so that the top-left of the bounding box sits at
+ *    (PADDING, PADDING) inside the parent's content area.  All children
+ *    shift by the same delta, preserving their relative layout.
+ * 3. Resize the parent to: width = contentW + 2*PADDING,
+ *    height = HEADER_HEIGHT + contentH + 2*PADDING.
+ * 4. Clear the size floor (minWidth/minHeight = null) so future auto-resize
+ *    can shrink freely.
+ *
+ * Returns the updated Map.  Does nothing if the parent has no children.
+ */
+export function fitToContents(
+  cards: Map<number, CardData>,
+  parentId: number
+): Map<number, CardData> {
+  const parent = cards.get(parentId)
+  if (!parent) return cards
+
+  const children = getChildren(cards, parentId)
+  if (children.length === 0) return cards
+
+  // Step 1: bounding box in parent-local content-area coordinates.
+  let minX = Infinity
+  let minY = Infinity
+  let maxRight = -Infinity
+  let maxBottom = -Infinity
+  for (const child of children) {
+    minX = Math.min(minX, child.x)
+    minY = Math.min(minY, child.y)
+    maxRight = Math.max(maxRight, child.x + child.width)
+    maxBottom = Math.max(maxBottom, child.y + child.height)
+  }
+
+  const contentW = maxRight - minX
+  const contentH = maxBottom - minY
+
+  // Step 2: shift delta so content box top-left lands at (PADDING, PADDING).
+  const dx = PADDING - minX
+  const dy = PADDING - minY
+
+  const updated = new Map(cards)
+
+  if (dx !== 0 || dy !== 0) {
+    for (const child of children) {
+      updated.set(child.id, { ...child, x: child.x + dx, y: child.y + dy })
+    }
+  }
+
+  // Step 3 & 4: resize parent to equal-margin fit, clear floor.
+  const newW = Math.max(MIN_W, contentW + 2 * PADDING)
+  const newH = Math.max(MIN_H, HEADER_HEIGHT + contentH + 2 * PADDING)
+  updated.set(parentId, { ...parent, width: newW, height: newH, minWidth: null, minHeight: null })
 
   return updated
 }

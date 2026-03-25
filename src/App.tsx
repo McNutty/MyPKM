@@ -35,6 +35,7 @@ import {
   computeStackedPosition,
   computeEdgePoint,
   applyPushMode,
+  fitToContents,
   PADDING,
   BOTTOM_PADDING,
   HEADER_HEIGHT,
@@ -1350,6 +1351,15 @@ export default function App() {
         nextCards = autoResizeParent(nextCards, card.parentId)
       }
 
+      // Drop onto an empty card: apply fit-to-contents so the newly-created
+      // parent wraps the dropped card with equal margins on all four sides.
+      // `target` was captured before the drop, so target's children count of 0
+      // means the nest target was empty before this card was dropped onto it.
+      const targetWasEmpty = getChildren(new Map(cardsRef.current), nestTargetId).length === 0
+      if (targetWasEmpty) {
+        nextCards = fitToContents(nextCards, nestTargetId)
+      }
+
       setCards(nextCards)
 
       // Persist: updateNodeParent atomically sets parent_id and layout coordinates
@@ -1376,7 +1386,12 @@ export default function App() {
         for (const [id, c] of nextCards) {
           if (id === cardId) continue // already persisted via updateNodeParent
           const before = stateBefore.get(id)
-          if (!before || c.width !== before.width || c.height !== before.height) {
+          if (
+            !before ||
+            c.x !== before.x || c.y !== before.y ||
+            c.width !== before.width || c.height !== before.height ||
+            c.minWidth !== before.minWidth || c.minHeight !== before.minHeight
+          ) {
             ancestorWrites.push(
               db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
             )
@@ -1729,17 +1744,41 @@ export default function App() {
       let resetH: number
 
       if (isParent) {
-        // Parent card: fit tightly to the children bounding box (same logic as
-        // autoResizeParent, but applied directly so we can compute the target size
-        // without triggering the floor guard -- we're clearing the floor here).
-        let maxRight = 0
-        let maxBottom = 0
-        for (const child of children) {
-          maxRight = Math.max(maxRight, child.x + child.width)
-          maxBottom = Math.max(maxBottom, child.y + child.height)
+        // Parent card: center children inside the parent with equal margins on
+        // all four sides, then fit the parent to that centered content.
+        // fitToContents handles the shift + resize + floor clear in one step.
+        const stateBefore = new Map(cardsRef.current)
+
+        const nextCards = fitToContents(cardsRef.current, cardId)
+        setCards(nextCards)
+
+        // Persist all changed cards (shifted children + resized parent).
+        try {
+          const writes: Promise<void>[] = []
+          for (const [id, c] of nextCards) {
+            const before = stateBefore.get(id)
+            if (!before) continue
+            const posChanged = c.x !== before.x || c.y !== before.y
+            const sizeChanged = c.width !== before.width || c.height !== before.height
+            const floorChanged = c.minWidth !== before.minWidth || c.minHeight !== before.minHeight
+            if (posChanged || sizeChanged || floorChanged) {
+              writes.push(db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight))
+            }
+          }
+          await Promise.all(writes)
+          // If the parent itself has a parent, re-run auto-resize upward so
+          // ancestors reflect the parent's new (potentially smaller) size.
+          const updatedParent = nextCards.get(cardId)
+          if (updatedParent?.parentId !== null && updatedParent?.parentId !== undefined) {
+            setCards((prev) => autoResizeParent(prev, updatedParent.parentId!))
+          }
+          setError(null)
+        } catch (err) {
+          console.error('[App] Failed to persist fit-to-contents:', err)
+          setError('Failed to save fit-to-contents.')
+          setCards(stateBefore)
         }
-        resetW = Math.max(MIN_W, maxRight + PADDING)
-        resetH = Math.max(MIN_H, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+        return
       } else {
         // Leaf card: snap back to the same dimensions used when a new card is
         // created (handleDoubleClick). Must stay in sync with that path.
