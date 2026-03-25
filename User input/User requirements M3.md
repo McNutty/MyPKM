@@ -63,4 +63,3 @@
 26. Two relationships between same cards -- independently positioned, no interference - OK!
 27. Double-click to edit opens at visual (on-curve) position - OK!
 28. Label stays under mouse during drag on curved arrows (no drift) - OK!
-	1. Better, but still a bit off close to the endpoints. But we'll call it good enough.
