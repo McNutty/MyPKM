@@ -80,6 +80,10 @@ export default function App() {
   const [isPanning, setIsPanning] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Active map ID. Defaults to 1 (the seed map). Will be driven by a model
+  // picker in a future milestone -- kept as state now so all IPC calls are
+  // already parameterised and only this one line needs to change.
+  const [mapId] = useState<number>(1)
   // Hover hit-test: ID of the smallest regular card under the cursor.
   // Computed on every mousemove in handleMouseMove (App level) so that nested
   // cards don't all show connection handles simultaneously -- only the topmost
@@ -182,8 +186,8 @@ export default function App() {
     async function loadCards() {
       try {
         const [nodes, rels] = await Promise.all([
-          db.getMapNodes(1),
-          db.getMapRelationships(1),
+          db.getMapNodes(mapId),
+          db.getMapRelationships(mapId),
         ])
         if (cancelled) return
 
@@ -245,7 +249,7 @@ export default function App() {
 
     loadCards()
     return () => { cancelled = true }
-  }, [])
+  }, [mapId])
 
   // ---------------------------------------------------------------------------
   // ZOOM-TO-FIT utility
@@ -1058,7 +1062,7 @@ export default function App() {
       const pos = relCardPositionsRef.current.get(rel.id)
       if (!pos || (pos.x === 0 && pos.y === 0)) continue
       writes.push(
-        db.updateNodeLayout(rel.relNodeId, 1, pos.x, pos.y, 80, 28, null, null).catch((err) => {
+        db.updateNodeLayout(rel.relNodeId, mapId, pos.x, pos.y, 80, 28, null, null).catch((err) => {
           console.error('[App] Failed to persist rel card position after card drag:', err)
         })
       )
@@ -1092,7 +1096,7 @@ export default function App() {
           // 80x28 -- the same values the Rust backend sets on create_relationship.
           // The layout table requires width > 0 and height > 0.
           try {
-            await db.updateNodeLayout(rel.relNodeId, 1, pos.x, pos.y, 80, 28, null, null)
+            await db.updateNodeLayout(rel.relNodeId, mapId, pos.x, pos.y, 80, 28, null, null)
           } catch (err) {
             console.error('[App] Failed to persist relationship card position:', err)
             setError('Failed to save relationship card position.')
@@ -1134,7 +1138,7 @@ export default function App() {
       if (targetId === null) return // Released on empty canvas -- cancel
 
       try {
-        const rel = await db.createRelationship(sourceId, targetId, '', 1)
+        const rel = await db.createRelationship(sourceId, targetId, '', mapId)
         setRelationships((prev) => [...prev, rel])
         // Register the new rel with position (0,0) -- RelationshipOverlay falls
         // back to the computed midpoint when x===0 && y===0.
@@ -1240,7 +1244,7 @@ export default function App() {
           return updated
         })
         try {
-          await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height, finalMinW, finalMinH)
+          await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height, finalMinW, finalMinH)
 
           // Persist any ancestor whose size grew due to autoResizeParent being
           // called during the resize drag. autoResizeParent fires on every
@@ -1254,7 +1258,7 @@ export default function App() {
               if (!ancestor) break
               ancestorWrites.push(
                 db.updateNodeLayout(
-                  ancestor.id, 1,
+                  ancestor.id, mapId,
                   ancestor.x, ancestor.y,
                   ancestor.width, ancestor.height,
                   ancestor.minWidth, ancestor.minHeight
@@ -1299,7 +1303,7 @@ export default function App() {
     // M1: NESTING DISABLED -- just persist the new position
     if (!NESTING_ENABLED) {
       try {
-        await db.updateNodeLayout(card.id, 1, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight)
+        await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight)
         setError(null)
       } catch (err) {
         console.error('[App] Failed to persist drag position:', err)
@@ -1307,7 +1311,7 @@ export default function App() {
         // Revert position -- we stored the pre-drag values in dragState offsets
         // but we don't have the original coords. We re-fetch from DB to be safe.
         try {
-          const nodes = await db.getMapNodes(1)
+          const nodes = await db.getMapNodes(mapId)
           const raw = new Map<number, CardData>()
           for (const node of nodes) {
             // Filter out relationship backing nodes, same as the primary load path.
@@ -1401,7 +1405,7 @@ export default function App() {
         await db.updateNodeParent(
           cardId,
           nestTargetId,
-          1,
+          mapId,
           finalCard.x,
           finalCard.y,
           finalCard.width,
@@ -1424,7 +1428,7 @@ export default function App() {
             c.minWidth !== before.minWidth || c.minHeight !== before.minHeight
           ) {
             ancestorWrites.push(
-              db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
+              db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
             )
           }
         }
@@ -1529,7 +1533,7 @@ export default function App() {
             await db.updateNodeParent(
               cardId,
               newParentId,
-              1,
+              mapId,
               finalCard.x,
               finalCard.y,
               finalCard.width,
@@ -1546,7 +1550,7 @@ export default function App() {
               const before = stateBefore.get(id)
               if (!before || c.width !== before.width || c.height !== before.height) {
                 ancestorWrites.push(
-                  db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
+                  db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
                 )
               }
             }
@@ -1620,7 +1624,7 @@ export default function App() {
               card.width !== before.width ||
               card.height !== before.height
             ) {
-              writes.push(db.updateNodeLayout(id, 1, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
+              writes.push(db.updateNodeLayout(id, mapId, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
             }
           }
           try {
@@ -1652,7 +1656,7 @@ export default function App() {
           card.width !== before.width ||
           card.height !== before.height
         ) {
-          writes.push(db.updateNodeLayout(id, 1, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
+          writes.push(db.updateNodeLayout(id, mapId, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
         }
       }
       if (writes.length > 0) {
@@ -1666,7 +1670,7 @@ export default function App() {
       } else {
         // Fallback: just persist the dragged card if the snapshot was unavailable.
         try {
-          await db.updateNodeLayout(finalCard.id, 1, finalCard.x, finalCard.y, finalCard.width, finalCard.height, finalCard.minWidth, finalCard.minHeight)
+          await db.updateNodeLayout(finalCard.id, mapId, finalCard.x, finalCard.y, finalCard.width, finalCard.height, finalCard.minWidth, finalCard.minHeight)
           setError(null)
         } catch (err) {
           console.error('[App] Failed to persist drag position (layout-only fallback):', err)
@@ -1697,7 +1701,7 @@ export default function App() {
       const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
 
       try {
-        const id = await db.createNode(1, '', canvasX, canvasY, 150, 60)
+        const id = await db.createNode(mapId, '', canvasX, canvasY, 150, 60)
         const newCard: CardData = {
           id,
           content: '',
@@ -1793,7 +1797,7 @@ export default function App() {
             const sizeChanged = c.width !== before.width || c.height !== before.height
             const floorChanged = c.minWidth !== before.minWidth || c.minHeight !== before.minHeight
             if (posChanged || sizeChanged || floorChanged) {
-              writes.push(db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight))
+              writes.push(db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight))
             }
           }
           await Promise.all(writes)
@@ -1833,7 +1837,7 @@ export default function App() {
 
       // Persist -- floor cleared (null, null).
       try {
-        await db.updateNodeLayout(cardId, 1, card.x, card.y, resetW, resetH, null, null)
+        await db.updateNodeLayout(cardId, mapId, card.x, card.y, resetW, resetH, null, null)
         setError(null)
       } catch (err) {
         console.error('[App] Failed to persist reset size:', err)
@@ -2045,7 +2049,7 @@ export default function App() {
       const canvasY = (lastMouseRef.current.clientY - rect.top - viewport.panY) / viewport.zoom
 
       try {
-        const id = await db.createNode(1, '', canvasX, canvasY, 150, 60)
+        const id = await db.createNode(mapId, '', canvasX, canvasY, 150, 60)
         const newCard: CardData = {
           id,
           content: '',
