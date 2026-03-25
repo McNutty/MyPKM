@@ -545,23 +545,15 @@ export function applyPushMode(
     }
 
     // Walk up ancestors: if an ancestor grew and now overlaps its siblings,
-    // push them. Stop when no changes occur.
+    // push them. We must visit every ancestor in the chain because
+    // autoResizeParent already grew all of them -- each one may independently
+    // overlap its own siblings regardless of whether a lower level changed.
     let ancestorId: number | null = immediateParentId
     while (ancestorId !== null) {
       const ancestor = updated.get(ancestorId)
       if (!ancestor) break
 
-      const before = new Map(updated)
       updated = pushCascade(updated, ancestorId)
-
-      // Check if anything moved at this level.
-      let changed = false
-      for (const [id, c] of updated) {
-        const prev = before.get(id)
-        if (!prev || prev.x !== c.x || prev.y !== c.y) { changed = true; break }
-      }
-      if (!changed) break
-
       ancestorId = ancestor.parentId
     }
   }
