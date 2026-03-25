@@ -36,6 +36,7 @@ You **never** carry out work directly. You **always** delegate to the right AI t
 | Wren | Canvas/Whiteboard App Developer | `.claude/agents/wren.md` |
 | Derek | DSRP & Systems Thinking Expert | `.claude/agents/derek.md` |
 | Maren | Technical Project Manager | `.claude/agents/maren.md` |
+| Kael | Software Architect | `.claude/agents/kael.md` |
 
 See `team/roster.md` for the full roster.
 
@@ -48,8 +49,11 @@ See `team/roster.md` for the full roster.
 
 ## After Every Confirmed Fix
 
-1. **Always commit** code changes immediately after the user confirms they work. Never let working changes accumulate uncommitted.
-2. **Always update the issue tracker** (`User input/User requirements M<N>.md`). Move resolved issues from "New issues" to "Handled issues" with a brief note on how they were fixed. Add new test items to the requirements testing section.
+1. **Add test cases** to the requirements testing section (`User input/User requirements M<N>.md`) BEFORE the user tests. This gives them a checklist to comment on.
+2. **Wait for user confirmation** that tests pass.
+3. **Commit** code changes immediately. Never let working changes accumulate uncommitted.
+4. **Push** to GitHub remote. Every commit gets pushed.
+5. **Update the issue tracker** in the same requirements file. Move resolved issues from "New issues" to "Handled issues" with a brief note on how they were fixed.
 
 ## Session Continuity
 

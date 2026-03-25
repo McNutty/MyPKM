@@ -6,7 +6,7 @@
 	- Add some sort of card alignment choice. A double click aligns all cards according to alignment choice. List, column and no alignment. A resized card gets "no alignment". A double click then works as now.
 - ~~Fit-to-contents (parent double-click + drop-on-empty)~~ — Moved to Handled.
 - ~~Pushing Mode~~ — Moved to Handled.
-- We still have some issue with size persistence I've noticed. My tests show that when a child is manually resized but not the parent, the parent shrinks a bit upon restart so the resized child might "stick out".
+- ~~Size persistence bug~~ — Moved to Handled.
 
 # Handled issues (either solved in code or updated in documentation)
 
@@ -60,6 +60,12 @@
 
 - Pushing Mode: Hold Shift while dragging to push sibling cards out of the way. Cascading collisions, parent auto-expansion, ancestor cascade.
   - **Fixed:** `applyPushMode` in `canvas-store.ts` uses pure AABB min-penetration collision resolution with BFS cascade. `pushCascade` resolves sibling overlaps iteratively (max 20 passes). Parent extends right/down via `autoResizeParent`; immediate parent gets `minWidth`/`minHeight` floor. Ancestor expansion cascades upward — if a parent grows and overlaps its own siblings, they get pushed too. Nested cards clamped to PADDING; root-level cards push freely in all directions. Shift toggle mid-drag via `shiftHeldDuringDragRef`. Single-child parent expansion works (sibling guard removed). Error-recovery path now filters relationship backing nodes.
+
+- Fit-to-contents: Double-click a parent card to center children with equal margins and shrink parent to fit. Also triggers on drop-on-empty-card.
+  - **Fixed:** `fitToContents` in `canvas-store.ts` computes children bounding box, shifts all children by uniform delta to center content, resizes parent to `contentSize + 2*PADDING`, clears size floor. Called from `handleResetSize` (parent branch) and nest handler (when target was empty). PADDING increased from 16 to 24.
+
+- Size persistence: parent shrinks on reload after child is manually resized.
+  - **Fixed:** Resize mouseup handler now walks the ancestor chain and persists every parent whose dimensions changed via `autoResizeParent`, not just the resized card itself.
 
 # Requirements testing
 
@@ -133,3 +139,5 @@
 63. Drop a card onto an empty card -> fit-to-contents applied automatically - OK!
 64. Double-click leaf card -> still resets to default size (no regression) - OK!
 65. Manually resize a child card (make it bigger), reload -> parent still contains the child (no sticking out) - OK!
+66. Connection handles still appear on hover when no gesture is active (no regression) - OK!
+67. Relationship label positions persist correctly after dragging cards with relationships - OK!

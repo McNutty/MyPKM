@@ -9,3 +9,4 @@
 | Wren   | Canvas/Whiteboard App Developer  | Active |
 | Derek  | DSRP & Systems Thinking Expert   | Active |
 | Maren  | Technical Project Manager        | Active |
+| Kael   | Software Architect               | Active |

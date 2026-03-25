@@ -553,7 +553,11 @@ export default function App() {
       // hoveredCardId at the App level rather than letting each Card track its own
       // hover state, which was causing all ancestor cards to light up simultaneously.
       // Lightweight: O(N) over cardsRef.current, no DOM queries.
-      {
+      // Skip entirely during active gestures -- connection handles are irrelevant
+      // while the user is dragging, resizing, connecting, reattaching, or panning.
+      if (dragState || resizeState || connectingState || reattachState || draggingRelCardId !== null || isPanning) {
+        setHoveredCardId(null)
+      } else {
         const cursorCanvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
         const cursorCanvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
         let bestId: number | null = null
@@ -1048,16 +1052,18 @@ export default function App() {
   // Persists rel card positions for all relationships in the given list.
   // Skips rels with no relNodeId and positions still at the default (0,0).
   const persistRelCardPositions = useCallback(async (rels: typeof relationshipsRef.current) => {
+    const writes: Promise<void>[] = []
     for (const rel of rels) {
       if (rel.relNodeId === null) continue
       const pos = relCardPositionsRef.current.get(rel.id)
       if (!pos || (pos.x === 0 && pos.y === 0)) continue
-      try {
-        await db.updateNodeLayout(rel.relNodeId, 1, pos.x, pos.y, 80, 28, null, null)
-      } catch (err) {
-        console.error('[App] Failed to persist rel card position after card drag:', err)
-      }
+      writes.push(
+        db.updateNodeLayout(rel.relNodeId, 1, pos.x, pos.y, 80, 28, null, null).catch((err) => {
+          console.error('[App] Failed to persist rel card position after card drag:', err)
+        })
+      )
     }
+    await Promise.all(writes)
   }, [])
 
   // ---------------------------------------------------------------------------
