@@ -1,8 +1,18 @@
 # New issues (these should be moved to handled when taken care of)
 
-(none)
-
 # Handled issues (either solved in code or updated in documentation)
+
+- Auto-fit on startup so cards are visible without clicking "Fit".
+  - **Fixed:** `hasAutoFitted` ref + `zoomToFit()` call after initial card load. App auto-fits to show all cards on first render.
+
+- Hold Space to activate panning mode (works over cards too). Cursor changes to grab/grabbing. Hint overlay shows shortcuts.
+  - **Fixed:** `spaceHeldRef` + `spaceHeld` state with keydown/keyup listeners. `onMouseDownCapture` on container intercepts during capture phase when Space is held, enabling panning over cards. CSS `<style>` tag with `!important` overrides all descendant cursors (including crosshair on connection handles) to `grab`/`grabbing` when Space is held. Hint overlay in bottom-left shows "Space: Pan · C: New card · Double-click: New card".
+
+- Press C to create a new card at cursor position (doesn't fire while editing text).
+  - **Fixed:** `lastMouseRef` tracks cursor position in handleMouseMove. C key handler creates card at cursor position, guarded by `editingCardId`/`editingRelId` checks.
+
+- Card persistence bug: some cards don't keep their size after reload, children stick out.
+  - **Fixed:** `autoResizeParent` correctly resized parent/ancestor cards in memory during nest/unnest, but only the dragged card's layout was persisted to DB. Parent dimensions were lost on reload. Now both nest and unnest paths diff all cards against pre-operation state and persist any whose width/height changed.
 
 - Draggable relationship cards with curved arrows. Card can be placed anywhere; arrow bends as a smooth arc through the card's position. Position persists to DB via the backing node's layout row.
   - **Fixed:** SVG lines replaced with quadratic Bezier paths. Relationship card is draggable (mousedown/move/up). Position stored as absolute canvas coords in layout table. Curve arcs through card center; degenerates to straight line at default midpoint. Relationship nodes filtered from canvas card rendering.
@@ -63,3 +73,10 @@
 26. Two relationships between same cards -- independently positioned, no interference - OK!
 27. Double-click to edit opens at visual (on-curve) position - OK!
 28. Label stays under mouse during drag on curved arrows (no drift) - OK!
+29. App auto-fits to show all cards on startup - OK!
+30. Hold Space to pan (works over cards too, not just empty canvas) - OK!
+31. Cursor changes to grab/grabbing during space panning (including over cards and connection handles) - OK!
+32. Press C to create a new card at cursor position - OK!
+33. C shortcut doesn't fire while editing text - OK!
+34. Hint overlay shows all shortcuts (Space, C, double-click) - OK!
+35. Nest a card into a parent (causing auto-expand), reload -> parent keeps its expanded size - OK!

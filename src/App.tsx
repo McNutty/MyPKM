@@ -126,6 +126,10 @@ export default function App() {
 
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const canvasRef = useRef<HTMLDivElement>(null)
+  // Space bar pan mode: tracked as a ref so keydown/keyup don't cause re-renders.
+  // We only need React state for the cursor change, handled separately below.
+  const spaceHeldRef = useRef(false)
+  const [spaceHeld, setSpaceHeld] = useState(false)
 
   // Pending drag: records the mousedown position before the cursor has moved
   // far enough to commit to a real drag. Using a ref avoids re-renders on every
@@ -139,9 +143,16 @@ export default function App() {
     cardRect: DOMRect | null
   } | null>(null)
 
+  // Last known mouse position in screen space (clientX/clientY), for keyboard shortcuts
+  // that need to know where the cursor is (e.g. "C" to create card at cursor).
+  const lastMouseRef = useRef({ clientX: 0, clientY: 0 })
+
   // Keep a stable ref to cards for use inside event handlers that close over stale state
   const cardsRef = useRef(cards)
   useEffect(() => { cardsRef.current = cards }, [cards])
+
+  // Guard: auto-fit runs once after the initial card load, never again
+  const hasAutoFitted = useRef(false)
 
   // ---------------------------------------------------------------------------
   // INITIALIZATION -- load cards from DB on mount
@@ -178,6 +189,15 @@ export default function App() {
         // Task 1: walk the parent chain to assign correct depths to every card.
         const map = computeDepths(raw)
         setCards(map)
+
+        // Auto-fit on startup: sync the ref now (before React re-renders) so
+        // zoomToFit can read the freshly loaded cards immediately.
+        if (!hasAutoFitted.current) {
+          hasAutoFitted.current = true
+          cardsRef.current = map
+          zoomToFit()
+        }
+
         setRelationships(rels)
 
         // Build relCardPositions: map each rel.id -> its node's canvas position.
@@ -279,8 +299,9 @@ export default function App() {
         e.target === canvasRef.current ||
         (e.target as HTMLElement).dataset?.canvas === 'true'
 
-      if (isCanvas || e.button === 1) {
-        // Left click on empty canvas or middle-mouse: start panning
+      // Start panning on: left-click on empty canvas, middle-mouse anywhere,
+      // or left-click anywhere when Space is held (Figma-style space-bar pan).
+      if (isCanvas || e.button === 1 || (e.button === 0 && spaceHeldRef.current)) {
         setSelectedId(null)
         setSelectedRelId(null)
         // Do NOT call setEditingRelId(null) here -- if the label EditInput is
@@ -311,6 +332,45 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [zoomToFit])
+
+  // Space bar pan mode.
+  // keydown activates it; keyup deactivates it and stops any active pan.
+  // Guard: skip when a text input / textarea / contenteditable is focused so
+  // Space still works normally while editing card labels.
+  useEffect(() => {
+    const isTextFocused = () => {
+      const el = document.activeElement
+      if (!el) return false
+      const tag = (el as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return true
+      if ((el as HTMLElement).isContentEditable) return true
+      return false
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      if (isTextFocused()) return
+      if (spaceHeldRef.current) return // already held -- suppress repeated keydown events
+      e.preventDefault()
+      spaceHeldRef.current = true
+      setSpaceHeld(true)
+    }
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      spaceHeldRef.current = false
+      setSpaceHeld(false)
+      // If the user releases Space while mid-pan, stop panning cleanly.
+      setIsPanning(false)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [])
 
   // ---------------------------------------------------------------------------
   // DRAG CARD
@@ -425,6 +485,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY }
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
 
@@ -1139,7 +1200,9 @@ export default function App() {
 
       setCards(nextCards)
 
-      // Persist: updateNodeParent atomically sets parent_id and layout coordinates.
+      // Persist: updateNodeParent atomically sets parent_id and layout coordinates
+      // for the dragged card. Then persist any parent/ancestor cards whose size
+      // changed due to autoResizeParent -- those are not covered by updateNodeParent.
       const finalCard = nextCards.get(cardId)!
       try {
         await db.updateNodeParent(
@@ -1153,6 +1216,21 @@ export default function App() {
           finalCard.minWidth,
           finalCard.minHeight
         )
+        // Persist all cards whose size changed due to autoResizeParent (parents
+        // and ancestors of the nest target, and possibly the old parent). Without
+        // this, auto-resized containers lose their expanded size on reload and
+        // children appear to overflow them.
+        const ancestorWrites: Promise<void>[] = []
+        for (const [id, c] of nextCards) {
+          if (id === cardId) continue // already persisted via updateNodeParent
+          const before = stateBefore.get(id)
+          if (!before || c.width !== before.width || c.height !== before.height) {
+            ancestorWrites.push(
+              db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
+            )
+          }
+        }
+        await Promise.all(ancestorWrites)
         setError(null)
       } catch (err) {
         console.error('[App] Failed to persist nest:', err)
@@ -1261,6 +1339,20 @@ export default function App() {
               finalCard.minWidth,
               finalCard.minHeight
             )
+            // Persist all cards whose size changed due to autoResizeParent (old
+            // parent shrinks when a card leaves it). Without this, the old parent
+            // reloads at its pre-unnest size and children appear to overflow it.
+            const ancestorWrites: Promise<void>[] = []
+            for (const [id, c] of nextCards) {
+              if (id === cardId) continue // already persisted via updateNodeParent
+              const before = stateBefore.get(id)
+              if (!before || c.width !== before.width || c.height !== before.height) {
+                ancestorWrites.push(
+                  db.updateNodeLayout(id, 1, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
+                )
+              }
+            }
+            await Promise.all(ancestorWrites)
             setError(null)
           } catch (err) {
             console.error('[App] Failed to persist unnest:', err)
@@ -1603,6 +1695,59 @@ export default function App() {
   }, [selectedRelId])
 
   // ---------------------------------------------------------------------------
+  // CREATE CARD KEYBOARD SHORTCUT ("C" key)
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.key !== 'c' && e.key !== 'C') return
+      // Don't fire when typing inside a text field or contenteditable
+      const active = document.activeElement
+      if (
+        active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        (active instanceof HTMLElement && active.isContentEditable)
+      ) return
+
+      // Convert the last known mouse position to canvas coordinates
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const canvasX = (lastMouseRef.current.clientX - rect.left - viewport.panX) / viewport.zoom
+      const canvasY = (lastMouseRef.current.clientY - rect.top - viewport.panY) / viewport.zoom
+
+      try {
+        const id = await db.createNode(1, '', canvasX, canvasY, 150, 60)
+        const newCard: CardData = {
+          id,
+          content: '',
+          x: canvasX,
+          y: canvasY,
+          width: 150,
+          height: 60,
+          parentId: null,
+          depth: 0,
+          color: getDepthColor(0),
+          minWidth: null,
+          minHeight: null,
+        }
+        setCards((prev) => {
+          const updated = new Map(prev)
+          updated.set(id, newCard)
+          return updated
+        })
+        setSelectedId(id)
+        setNewCardId(id)
+        setError(null)
+      } catch (err) {
+        console.error('[App] Failed to create card:', err)
+        setError(`Failed to create card: ${err}`)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [viewport])
+
+  // ---------------------------------------------------------------------------
   // RELATIONSHIP LABEL COMMIT
   // ---------------------------------------------------------------------------
   const handleRelLabelCommit = useCallback(
@@ -1783,16 +1928,45 @@ export default function App() {
           flex: 1,
           overflow: 'hidden',
           backgroundColor: '#f5f5f5',
-          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : 'default',
+          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : spaceHeld ? 'grab' : 'default',
           position: 'relative',
         }}
         onWheel={handleWheel}
         onMouseDown={handleCanvasMouseDown}
+        onMouseDownCapture={(e) => {
+          // When Space is held, intercept ALL mousedowns (even on cards) to start panning.
+          // Capture phase fires before card mousedown handlers, so e.stopPropagation()
+          // prevents them from starting a card drag.
+          if (e.button === 0 && spaceHeldRef.current) {
+            e.stopPropagation()
+            e.preventDefault()
+            setSelectedId(null)
+            setSelectedRelId(null)
+            setIsPanning(true)
+            panStartRef.current = {
+              x: e.clientX,
+              y: e.clientY,
+              panX: viewport.panX,
+              panY: viewport.panY,
+            }
+          }
+        }}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={() => setHoveredCardId(null)}
         onDoubleClick={handleDoubleClick}
       >
+        {/* Global cursor override when Space is held for panning.
+            !important beats crosshair on connection handles, grab on card roots,
+            and text on textareas -- everything defers to the pan cursor. */}
+        {(spaceHeld || isPanning) && (
+          <style>{`
+            [data-canvas="true"] * {
+              cursor: ${isPanning ? 'grabbing' : 'grab'} !important;
+            }
+          `}</style>
+        )}
+
         {/* Loading overlay */}
         {isLoading && (
           <div
@@ -1826,7 +2000,7 @@ export default function App() {
             }}
           >
             <span style={{ fontSize: 14, color: '#bbb', userSelect: 'none' }}>
-              Double-click anywhere to create a card
+              Double-click or press C to create a card
             </span>
           </div>
         )}
@@ -1914,6 +2088,27 @@ export default function App() {
             />
           )}
         </div>
+
+        {/* Keyboard hint -- bottom-left */}
+        {!isLoading && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 10,
+              left: 10,
+              zIndex: 1000,
+              background: 'rgba(255,255,255,0.9)',
+              padding: '4px 10px',
+              borderRadius: 6,
+              fontSize: 12,
+              color: '#bbb',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          >
+            Space: Pan&nbsp;&nbsp;·&nbsp;&nbsp;C: New card&nbsp;&nbsp;·&nbsp;&nbsp;Double-click: New card
+          </div>
+        )}
 
         {/* Card count indicator */}
         {!isLoading && (
