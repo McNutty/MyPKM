@@ -73,6 +73,10 @@ export class TauriDb implements DbInterface {
     return invoke('delete_node', { nodeId })
   }
 
+  async deleteNodeCascade(nodeId: number): Promise<number> {
+    return invoke<number>('delete_node_cascade', { nodeId })
+  }
+
   async createRelationship(
     sourceId: number,
     targetId: number,

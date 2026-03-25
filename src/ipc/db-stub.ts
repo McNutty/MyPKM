@@ -103,6 +103,20 @@ export class StubDb implements DbInterface {
     this.nodes.delete(nodeId)
   }
 
+  async deleteNodeCascade(nodeId: number): Promise<number> {
+    // Recursively collect all descendants and delete them
+    const toDelete: number[] = []
+    const collect = (id: number) => {
+      toDelete.push(id)
+      for (const [cid, node] of this.nodes) {
+        if (node.parent_id === id) collect(cid)
+      }
+    }
+    collect(nodeId)
+    for (const id of toDelete) this.nodes.delete(id)
+    return toDelete.length
+  }
+
   async createRelationship(
     sourceId: number,
     targetId: number,

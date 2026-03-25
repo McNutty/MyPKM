@@ -17,7 +17,7 @@ export interface CardData {
   /** Position relative to parent's content area (or canvas origin if parentId is null) */
   x: number
   y: number
-  /** Explicit width/height. For containers, this may be overridden by auto-resize. */
+  /** Explicit width/height. For cards with parts, this may be overridden by auto-resize. */
   width: number
   height: number
   /** Parent card ID, or null for top-level cards */

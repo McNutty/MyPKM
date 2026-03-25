@@ -23,6 +23,7 @@ pub fn run() {
             commands::update_node_content,
             commands::update_node_layout,
             commands::delete_node,
+            commands::delete_node_cascade,
             commands::update_node_parent,
             commands::create_relationship,
             commands::get_map_relationships,

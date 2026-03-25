@@ -101,6 +101,9 @@ export default function App() {
   // Offset from the card's center to the mouse position at drag-start, in canvas space
   const [relCardDragOffset, setRelCardDragOffset] = useState<{ x: number; y: number } | null>(null)
 
+  // CF-2: Subtree delete confirmation -- set when the selected card has descendants
+  const [deleteConfirm, setDeleteConfirm] = useState<{ cardId: number; descendantCount: number } | null>(null)
+
   // Keep stable refs for use inside async handlers
   const relCardPositionsRef = useRef(relCardPositions)
   useEffect(() => { relCardPositionsRef.current = relCardPositions }, [relCardPositions])
@@ -1595,43 +1598,102 @@ export default function App() {
   // ---------------------------------------------------------------------------
   // DELETE CARD (Delete key when a card is selected)
   // ---------------------------------------------------------------------------
+
+  /** Collect all descendant IDs (not including the card itself) by walking parentId links. */
+  const collectDescendants = useCallback((rootId: number, allCards: Map<number, CardData>): Set<number> => {
+    const result = new Set<number>()
+    const walk = (id: number) => {
+      for (const [cid, c] of allCards) {
+        if (c.parentId === id) {
+          result.add(cid)
+          walk(cid)
+        }
+      }
+    }
+    walk(rootId)
+    return result
+  }, [])
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteConfirm) return
+    const { cardId } = deleteConfirm
+    const snapshot = cardsRef.current
+    const descendants = collectDescendants(cardId, snapshot)
+    const deletedIds = new Set([cardId, ...descendants])
+
+    try {
+      await db.deleteNodeCascade(cardId)
+      setError(null)
+
+      // Remove all deleted cards from state
+      setCards((prev) => {
+        const updated = new Map(prev)
+        for (const id of deletedIds) updated.delete(id)
+        return updated
+      })
+
+      // Clean up relationships: remove any that touch a deleted card
+      setRelationships((prev) => prev.filter((r) => !deletedIds.has(r.sourceId) && !deletedIds.has(r.targetId)))
+
+      // Clean up relationship card positions for removed relationships
+      setRelCardPositions((prev) => {
+        const next = new Map(prev)
+        // We need to know which rel IDs to remove -- those whose source or target was deleted
+        for (const [relId] of next) {
+          const rel = relationshipsRef.current.find((r) => r.id === relId)
+          if (rel && (deletedIds.has(rel.sourceId) || deletedIds.has(rel.targetId))) {
+            next.delete(relId)
+          }
+        }
+        return next
+      })
+
+      // Clear selection/editing state if they reference deleted items
+      if (selectedId !== null && deletedIds.has(selectedId)) setSelectedId(null)
+      if (selectedRelId !== null) {
+        const rel = relationshipsRef.current.find((r) => r.id === selectedRelId)
+        if (rel && (deletedIds.has(rel.sourceId) || deletedIds.has(rel.targetId))) setSelectedRelId(null)
+      }
+      if (editingRelId !== null) {
+        const rel = relationshipsRef.current.find((r) => r.id === editingRelId)
+        if (rel && (deletedIds.has(rel.sourceId) || deletedIds.has(rel.targetId))) setEditingRelId(null)
+      }
+    } catch (err) {
+      console.error('[App] Failed to cascade-delete card:', err)
+      setError(`Failed to delete card: ${err}`)
+    }
+
+    setDeleteConfirm(null)
+  }, [deleteConfirm, collectDescendants, selectedId, selectedRelId, editingRelId])
+
+  const handleCancelDelete = useCallback(() => {
+    setDeleteConfirm(null)
+  }, [])
+
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key === 'Delete' && selectedId !== null) {
+        // Don't double-trigger if the confirmation dialog is already showing
+        if (deleteConfirm !== null) return
+
         const id = selectedId
-        const cardsBefore = new Map(cardsRef.current)
+        const currentCards = cardsRef.current
+        const descendants = collectDescendants(id, currentCards)
 
-        // Optimistic: remove card and all descendants from local state
-        setCards((prev) => {
-          const updated = new Map(prev)
-          const toDelete = new Set<number>()
-          const collectDescendants = (targetId: number) => {
-            toDelete.add(targetId)
-            for (const [cid, c] of updated) {
-              if (c.parentId === targetId) collectDescendants(cid)
-            }
-          }
-          collectDescendants(id)
-          for (const did of toDelete) updated.delete(did)
-          return updated
-        })
-        setSelectedId(null)
-
-        try {
-          await db.deleteNode(id)
-          setError(null)
-        } catch (err) {
-          console.error('[App] Failed to delete card:', err)
-          // Rust returns a descriptive message for the FK RESTRICT case.
-          const msg = String(err)
-          if (msg.includes('has children')) {
-            setError('Cannot delete: this card contains other cards. Remove or move its children first.')
-          } else {
+        if (descendants.size === 0) {
+          // Leaf card: delete directly, no confirmation needed
+          try {
+            await db.deleteNode(id)
+            setError(null)
+            setCards((prev) => { const updated = new Map(prev); updated.delete(id); return updated })
+            setSelectedId(null)
+          } catch (err) {
+            console.error('[App] Failed to delete card:', err)
             setError(`Failed to delete card: ${err}`)
           }
-          // Revert: restore the pre-delete state
-          setCards(cardsBefore)
-          setSelectedId(id)
+        } else {
+          // Card with parts: show confirmation dialog
+          setDeleteConfirm({ cardId: id, descendantCount: descendants.size })
         }
       } else if (e.key === 'Escape') {
         setSelectedId(null)
@@ -1640,7 +1702,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedId])
+  }, [selectedId, deleteConfirm, collectDescendants])
 
   // ---------------------------------------------------------------------------
   // RELATIONSHIP KEYBOARD ACTIONS (Delete, F to flip, Escape)
@@ -1693,6 +1755,18 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [selectedRelId])
+
+  // ---------------------------------------------------------------------------
+  // DELETE CONFIRM MODAL -- Escape key to cancel
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!deleteConfirm) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCancelDelete()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [deleteConfirm, handleCancelDelete])
 
   // ---------------------------------------------------------------------------
   // CREATE CARD KEYBOARD SHORTCUT ("C" key)
@@ -2130,6 +2204,76 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* CF-2: Subtree delete confirmation modal */}
+      {deleteConfirm !== null && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.35)',
+            zIndex: 9000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          onMouseDown={handleCancelDelete}
+        >
+          <div
+            style={{
+              backgroundColor: '#fff',
+              borderRadius: 10,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+              padding: '28px 32px 24px',
+              minWidth: 340,
+              maxWidth: 420,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 20,
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 15, color: '#222', lineHeight: 1.5 }}>
+              This card contains{' '}
+              <strong>{deleteConfirm.descendantCount}</strong>{' '}
+              part{deleteConfirm.descendantCount !== 1 ? 's' : ''}.
+              Delete the card and everything inside it?
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                onClick={handleCancelDelete}
+                style={{
+                  padding: '7px 18px',
+                  borderRadius: 6,
+                  border: '1px solid #d0d0d0',
+                  backgroundColor: '#f5f5f5',
+                  color: '#444',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                style={{
+                  padding: '7px 18px',
+                  borderRadius: 6,
+                  border: 'none',
+                  backgroundColor: '#c62828',
+                  color: '#fff',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Delete all
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -29,7 +29,7 @@ pub struct NodeWithLayout {
 // Helper: map rusqlite errors to descriptive strings
 // ============================================================
 fn sql_err(context: &str, e: rusqlite::Error) -> String {
-    format!("[db] {}: {}", context, e)
+    format!("{}: {}", context, e)
 }
 
 // ============================================================
@@ -45,7 +45,7 @@ pub fn get_map_nodes(
     state: tauri::State<'_, Mutex<Connection>>,
     map_id: i64,
 ) -> Result<Vec<NodeWithLayout>, String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let mut stmt = conn
         .prepare(
@@ -99,7 +99,7 @@ pub fn create_node(
     width: f64,
     height: f64,
 ) -> Result<i64, String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     // Run inside a transaction so both inserts succeed or neither does.
     conn.execute("BEGIN", [])
@@ -147,7 +147,7 @@ pub fn update_node_content(
     node_id: i64,
     content: String,
 ) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let rows_affected = conn
         .execute(
@@ -157,7 +157,7 @@ pub fn update_node_content(
         .map_err(|e| sql_err("update_node_content", e))?;
 
     if rows_affected == 0 {
-        return Err(format!("[db] update_node_content: node {} not found", node_id));
+        return Err(format!("Card {} not found", node_id));
     }
 
     Ok(())
@@ -179,7 +179,7 @@ pub fn update_node_layout(
     min_width: Option<f64>,
     min_height: Option<f64>,
 ) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let rows_affected = conn
         .execute(
@@ -192,7 +192,7 @@ pub fn update_node_layout(
 
     if rows_affected == 0 {
         return Err(format!(
-            "[db] update_node_layout: no layout row found for node {} on map {}",
+            "No layout found for card {} on map {}",
             node_id, map_id
         ));
     }
@@ -212,7 +212,7 @@ pub fn delete_node(
     state: tauri::State<'_, Mutex<Connection>>,
     node_id: i64,
 ) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let rows_affected = conn
         .execute(
@@ -223,8 +223,7 @@ pub fn delete_node(
             // Provide a clear message for the FK RESTRICT case.
             if e.to_string().contains("FOREIGN KEY") {
                 format!(
-                    "[db] delete_node: node {} has children and cannot be deleted until \
-                     they are removed first",
+                    "Card {} has children and cannot be deleted until they are removed first",
                     node_id
                 )
             } else {
@@ -233,10 +232,193 @@ pub fn delete_node(
         })?;
 
     if rows_affected == 0 {
-        return Err(format!("[db] delete_node: node {} not found", node_id));
+        return Err(format!("Card {} not found", node_id));
     }
 
     Ok(())
+}
+
+/// Delete a node and its entire descendant subtree in a single transaction.
+///
+/// This command bypasses the FK RESTRICT constraint that `delete_node` runs
+/// into when a node has children. It works in five steps inside one
+/// transaction:
+///
+///   1. Collect the full descendant set (including the root node itself) via
+///      a recursive CTE. Each row carries its depth so we can derive a
+///      correct topological deletion order (deepest nodes first).
+///   2. Read all `rel_node_id` values from relationships whose source, target,
+///      OR rel_node_id is in the descendant set. These companion nodes must be
+///      explicitly deleted because the FK flows nodes -> relationships, not
+///      the other way. Collecting by rel_node_id covers the case where a
+///      relationship label node was nested inside the subtree but the
+///      relationship's source/target are both outside it.
+///   3. Delete all relationship rows that reference any descendant node via
+///      source_id, target_id, OR rel_node_id. This three-column filter is the
+///      critical fix: previously only source_id/target_id were checked, which
+///      left behind relationship rows whose rel_node_id pointed into the
+///      subtree, blocking deletion of those descendant nodes.
+///   4. Delete the companion relationship-nodes collected in step 2 (those
+///      that are not already in the descendant set and thus not covered by
+///      step 5).
+///   5. Delete descendant nodes deepest-first, using the depth value from the
+///      CTE as the primary sort key (desc) and id as a stable tiebreaker.
+///      This is a true topological sort and correctly satisfies ON DELETE
+///      RESTRICT on nodes.parent_id regardless of insertion order.
+///
+/// Returns the total count of deleted nodes (descendants + companion nodes).
+///
+/// Matches: `DbInterface.deleteNodeCascade(nodeId)`
+#[tauri::command]
+pub fn delete_node_cascade(
+    state: tauri::State<'_, Mutex<Connection>>,
+    node_id: i64,
+) -> Result<i64, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    // ----------------------------------------------------------------
+    // 1. Collect all descendant node IDs (inclusive of root) with depth.
+    //    depth = 0 is the root being deleted; depth increases with each
+    //    level of nesting. We sort deepest-first in step 5.
+    // ----------------------------------------------------------------
+    let mut desc_stmt = conn
+        .prepare(
+            "WITH RECURSIVE descendants(id, depth) AS (
+                 SELECT id, 0 FROM nodes WHERE id = ?1
+                 UNION ALL
+                 SELECT n.id, d.depth + 1
+                 FROM nodes n JOIN descendants d ON n.parent_id = d.id
+             )
+             SELECT id, depth FROM descendants",
+        )
+        .map_err(|e| sql_err("prepare delete_node_cascade descendants", e))?;
+
+    // Collect as (id, depth) pairs so we can sort topologically later.
+    let descendant_pairs: Vec<(i64, i64)> = desc_stmt
+        .query_map(rusqlite::params![node_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| sql_err("query delete_node_cascade descendants", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| sql_err("collect delete_node_cascade descendants", e))?;
+
+    if descendant_pairs.is_empty() {
+        return Err(format!("Card {} not found", node_id));
+    }
+
+    let descendant_ids: Vec<i64> = descendant_pairs.iter().map(|(id, _)| *id).collect();
+
+    // ----------------------------------------------------------------
+    // 2. Collect rel_node_ids for all relationships touching descendants
+    //    via source_id, target_id, OR rel_node_id.
+    //
+    //    The rel_node_id arm is the critical addition: it catches the case
+    //    where a companion label node is nested inside the subtree but the
+    //    relationship's source and target are both outside it. Without this
+    //    arm the relationship row would survive step 3, then block step 5
+    //    from deleting the companion node.
+    //
+    //    We exclude companions that are already in the descendant set;
+    //    those will be deleted naturally in step 5 and do not need the
+    //    separate companion-delete pass in step 4.
+    // ----------------------------------------------------------------
+    let placeholders: String = descendant_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let rel_query = format!(
+        "SELECT rel_node_id FROM relationships \
+         WHERE (source_id IN ({p}) OR target_id IN ({p}) OR rel_node_id IN ({p})) \
+         AND rel_node_id IS NOT NULL",
+        p = placeholders
+    );
+
+    let params: Vec<rusqlite::types::Value> = descendant_ids
+        .iter()
+        .map(|id| rusqlite::types::Value::Integer(*id))
+        .collect();
+
+    let mut rel_stmt = conn
+        .prepare(&rel_query)
+        .map_err(|e| sql_err("prepare delete_node_cascade rel_node_ids", e))?;
+
+    // Companions that are NOT already going to be deleted as descendants.
+    let descendant_id_set: std::collections::HashSet<i64> =
+        descendant_ids.iter().cloned().collect();
+
+    let companion_ids: Vec<i64> = rel_stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| row.get(0))
+        .map_err(|e| sql_err("query delete_node_cascade rel_node_ids", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| sql_err("collect delete_node_cascade rel_node_ids", e))?
+        .into_iter()
+        .filter(|id| !descendant_id_set.contains(id))
+        .collect();
+
+    // ----------------------------------------------------------------
+    // 3-5. Execute all deletions inside a transaction.
+    // ----------------------------------------------------------------
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN delete_node_cascade", e))?;
+
+    let result = (|| -> Result<i64, rusqlite::Error> {
+        // 3. Delete ALL relationship rows that touch the descendant set via
+        //    any of their three node FKs (source_id, target_id, rel_node_id).
+        //    This is the complete filter: no relationship row that references
+        //    a descendant will survive to block subsequent node deletes.
+        let del_rel_query = format!(
+            "DELETE FROM relationships \
+             WHERE source_id IN ({p}) OR target_id IN ({p}) OR rel_node_id IN ({p})",
+            p = placeholders
+        );
+        conn.execute(
+            &del_rel_query,
+            rusqlite::params_from_iter(params.iter()),
+        )?;
+
+        // 4. Delete companion relationship-nodes that are NOT in the
+        //    descendant set (those are handled in step 5).
+        for companion_id in &companion_ids {
+            conn.execute(
+                "DELETE FROM nodes WHERE id = ?1",
+                rusqlite::params![companion_id],
+            )?;
+        }
+
+        // 5. Delete descendant nodes deepest-first.
+        //    Sort by depth DESC (leaves before parents), with id DESC as a
+        //    stable tiebreaker for nodes at the same depth level.
+        //    This is a correct topological sort that satisfies ON DELETE
+        //    RESTRICT on nodes.parent_id regardless of insertion order.
+        //    (The previous heuristic of sorting by id DESC was only correct
+        //    when children were always inserted after parents, which is not
+        //    guaranteed for companion relationship-nodes.)
+        let mut sorted_pairs = descendant_pairs.clone();
+        sorted_pairs.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+
+        for (desc_id, _depth) in &sorted_pairs {
+            conn.execute(
+                "DELETE FROM nodes WHERE id = ?1",
+                rusqlite::params![desc_id],
+            )?;
+        }
+
+        let total_deleted = (sorted_pairs.len() + companion_ids.len()) as i64;
+        Ok(total_deleted)
+    })();
+
+    match result {
+        Ok(count) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT delete_node_cascade", e))?;
+            Ok(count)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(sql_err("delete_node_cascade transaction", e))
+        }
+    }
 }
 
 // ============================================================
@@ -283,7 +465,7 @@ pub fn create_relationship(
     action: String,
     map_id: i64,
 ) -> Result<RelationshipData, String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     conn.execute("BEGIN", [])
         .map_err(|e| sql_err("BEGIN create_relationship", e))?;
@@ -350,7 +532,7 @@ pub fn get_map_relationships(
     state: tauri::State<'_, Mutex<Connection>>,
     _map_id: i64,
 ) -> Result<Vec<RelationshipData>, String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let mut stmt = conn
         .prepare(
@@ -396,7 +578,7 @@ pub fn update_relationship(
     id: i64,
     action: String,
 ) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     conn.execute("BEGIN", [])
         .map_err(|e| sql_err("BEGIN update_relationship", e))?;
@@ -435,7 +617,7 @@ pub fn update_relationship(
         Err(e) => {
             let _ = conn.execute("ROLLBACK", []);
             if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
-                Err(format!("[db] update_relationship: relationship {} not found", id))
+                Err(format!("Relationship {} not found", id))
             } else {
                 Err(sql_err("update_relationship transaction", e))
             }
@@ -453,7 +635,7 @@ pub fn flip_relationship(
     state: tauri::State<'_, Mutex<Connection>>,
     id: i64,
 ) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let rows_affected = conn
         .execute(
@@ -466,7 +648,7 @@ pub fn flip_relationship(
         .map_err(|e| sql_err("flip_relationship", e))?;
 
     if rows_affected == 0 {
-        return Err(format!("[db] flip_relationship: relationship {} not found", id));
+        return Err(format!("Relationship {} not found", id));
     }
 
     Ok(())
@@ -493,7 +675,7 @@ pub fn delete_relationship(
     state: tauri::State<'_, Mutex<Connection>>,
     id: i64,
 ) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     // Read rel_node_id before opening the transaction so we know what to clean up.
     let rel_node_id: Option<i64> = conn
@@ -504,7 +686,7 @@ pub fn delete_relationship(
         )
         .map_err(|e| {
             if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
-                format!("[db] delete_relationship: relationship {} not found", id)
+                format!("Relationship {} not found", id)
             } else {
                 sql_err("delete_relationship lookup", e)
             }
@@ -577,13 +759,10 @@ pub fn update_node_parent(
     // 1. Self-reference check (no DB call needed).
     // ----------------------------------------------------------------
     if new_parent_id == Some(node_id) {
-        return Err(format!(
-            "[db] update_node_parent: node {} cannot be its own parent",
-            node_id
-        ));
+        return Err("A card cannot be its own parent".to_string());
     }
 
-    let conn = state.lock().map_err(|e| format!("[db] mutex poisoned: {}", e))?;
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     // ----------------------------------------------------------------
     // 2. Cycle detection (only when reparenting to a real node).
@@ -666,7 +845,7 @@ pub fn update_node_parent(
             // Distinguish the "not found" case from a generic DB error.
             if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
                 Err(format!(
-                    "[db] update_node_parent: node {} or its layout row on map {} not found",
+                    "Card {} or its layout row on map {} not found",
                     node_id, map_id
                 ))
             } else {

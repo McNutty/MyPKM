@@ -43,6 +43,13 @@ export interface DbInterface {
    */
   updateNodeParent(nodeId: number, newParentId: number | null, mapId: number, x: number, y: number, width: number, height: number, minWidth: number | null, minHeight: number | null): Promise<void>
   deleteNode(nodeId: number): Promise<void>
+  /**
+   * Delete a node and its entire descendant subtree in one transaction.
+   * Also cleans up any relationship rows and companion relationship-nodes
+   * that reference the deleted descendants.
+   * Returns the total count of deleted nodes (descendants + companion nodes).
+   */
+  deleteNodeCascade(nodeId: number): Promise<number>
 
   // --- Relationship operations (M3) ---
   createRelationship(sourceId: number, targetId: number, action: string, mapId: number): Promise<RelationshipData>

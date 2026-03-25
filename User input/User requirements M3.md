@@ -1,5 +1,10 @@
 # New issues (these should be moved to handled when taken care of)
 
+- Re-attaching relationship ends. With an arrow selected, you should be able to drag the ends to new cards.
+- I want the card resizing only to be available when hovering over the lower right corner (where the indicator is), not along the whole lower and right borders. Right now I too often end up resizing when I want to move a card.
+- Hide the empty label when the arrow is not selected. It should only display the dotted line when not selected. The tradeoff being that you need to select the line in order to modify the curvature, since you need the label for that. Or maybe instead reveal it on hover instead of selection? Yes, this would be best.
+- Shift+Scrollwheel should pan left and right. Scroll up for left and down for right.
+
 # Handled issues (either solved in code or updated in documentation)
 
 - Auto-fit on startup so cards are visible without clicking "Fit".
@@ -80,3 +85,13 @@
 33. C shortcut doesn't fire while editing text - OK!
 34. Hint overlay shows all shortcuts (Space, C, double-click) - OK!
 35. Nest a card into a parent (causing auto-expand), reload -> parent keeps its expanded size - OK!
+36. Delete leaf card (no parts) -> immediate deletion, no dialog - OK!
+37. Delete card with parts -> dialog shows correct part count, Cancel leaves everything intact- OK!
+38. Delete All in dialog -> removes card, all descendants, and their relationships - OK!
+	1. Works on almost all cards, but on one in particular I get this error: Failed to delete card: delete_node_cascade transaction: FOREIGN KEY constraint failed
+	2. The previous failure is now working, so ok as far as I can tell.
+39. Deleting a card with parts does NOT briefly remove it then snap it back (old bug) - OK!
+	1. This was a technical regression test. The old behavior briefly flashed the deletion before reverting. The new dialog prevents this entirely.
+40. F key on selected relationship -> flips direction (arrowhead reverses) - OK
+41. No `[db]` prefix in any error message reaching the user - OK as far as I can tell.
+42. "Containers" replaced with DSRP terms in code comments - I'll trust you on this one.
