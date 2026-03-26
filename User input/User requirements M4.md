@@ -1,6 +1,7 @@
 # New issues (these should be moved to handled when taken care of)
 
-(No new issues)
+- Remove auto-shrink. Right now we have this functionality that cards that haven't "manually" changed size (by dragging the corner, or being extended by push-mode) will autoshrink when appropriate. But this is often jarring, and it is hard to keep track of what cards will do this, since it is hard to remember what cards are manually extended. Also, since the "double click parent to fit to contents" works so well, I think that is enough. I'm envisioning that this change would actually decrease complexity, since we now handle all cards the same, regardless if they have been resized previously or not. I also suspect that this will fix a subtle bug I've discovered, more on that later.
+- I want all card drops to use the new push-implementation. Right now it is only when cards are dropped *on a new parent* that triggers the push, not cards dropped on siblings in the same parent they already belong to. I think it would be most consistent to have all card drops feel the same. And I want them to use the *same* implementation, not just something similar.
 # Handled issues (either solved in code or updated in documentation)
 
 - Multiple Models: Create, switch, rename, delete canvases. Left sidebar model picker. Rust backend with cascade delete. Fixed get_map_relationships to filter by map_id. Added map_id column to relationships with migration + backfill.
@@ -9,6 +10,10 @@
   - **Fixed:** isTextFocused guard on Delete handler. applyPushMode called in resize branch. decomposeRelationshipGeometry rewritten with inverse Bezier (Q solved from label position). Hidden span measurer in Card.tsx for title width. Canvas 2D measureText for reset-to-fit. headerPadding=48 consistent across both.
 - Relationship labels follow endpoint cards automatically during push mode, fit-to-contents, drag, and all card-moving operations.
   - **Fixed:** Architectural refactor — label positions changed from absolute canvas coordinates to midpoint-relative offsets {dx, dy}. Labels now derive their absolute position at render time (midpoint + offset), eliminating the entire class of label-drift bugs. ~90 lines of manual label-shifting code deleted. Net -53 lines.
+- No-overlap on drop: Dropping a card into a parent with existing children reuses push-mode to resolve overlaps. Biggest-overlap sibling pushes the dropped card away. Parent resize cascades up via applyPushMode.
+  - **Fixed:** New `applyDropPush` function resolves drop overlaps. `resolvePush` extracted to module scope with inflated mover rect for smooth 24px buffer. NEST branch now calls `applyPushMode` for full cascade. Dead code removed (`STACK_GAP`, `computeStackedPosition`).
+- Push buffer margin: Cards maintain a 24px gap after push (not edge-to-edge). Applies to Shift+drag, resize push, and drop-push.
+  - **Fixed:** `resolvePush` inflates mover bounding box by PADDING before computing overlap penetration, achieving smooth continuous gap without oscillation.
 
 # Requirements testing
 
@@ -40,3 +45,15 @@
 	5. Still problems with the pushing card. The mor
 16. Relationship labels move along with their endpoint cards when fit-to-contents shifts children (double-click parent reset) - OK!
 	1. Works great, label stays perfectly in place.
+17. Shift+drag push leaves a ~24px gap between cards (not edge-to-edge) - OK!
+	1. Technically working, but very jerky, the cards being pushed are "bouncing along". Something is wrong here, it should be as smooth as when a child pushes out its parents edge, there is a buffer there as well, so it shouldn't affect the smoothness. Is the same code not being utilized?
+	2. Now working perfectly!
+18. Dropping a card into a parent with existing children pushes the dropped card away from overlapping siblings (with gap) - OK!
+19. Dropping a card overlapping multiple children resolves against the one with the biggest overlap - OK!
+20. Parent auto-resizes to fit all children after drop-push - OK!
+	1. The parent auto-resizes, but it is not cascading. When the parent expands, adjacent cards to that parent is not being pushed in turn. This makes me afraid that push-mode isn't really a mode that can be applied, but random code spread around the codebase for different situations. If this utilized proper push-mode, then the cascading pushes would just have worked. When I say that we should use push-mode, I mean it literally, not to write something "like" it.
+	2. Now working!
+21. Drop-push respects PADDING from the parent edge (card doesn't escape the parent) - OK!
+22. Resizing a card into a sibling also produces a buffer gap (not edge-to-edge) - OK!
+	1. Yes, but the same jerkyness as issue 17.
+	2. Now working!

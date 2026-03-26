@@ -27,7 +27,6 @@ export const BOTTOM_PADDING = 20  // Extra bottom buffer so children never clip 
 export const HEADER_HEIGHT = 28
 export const MIN_W = 100
 export const MIN_H = 50
-export const STACK_GAP = 10  // Vertical gap between stacked children
 
 const DEPTH_COLORS = [
   '#e3f2fd', // Level 0 - light blue
@@ -373,42 +372,6 @@ export function getAbsolutePosition(
   return { x, y }
 }
 
-/**
- * Compute the position for a card being nested into a parent so that it
- * stacks below all existing children without overlap.
- *
- * Children are stacked vertically in the parent's content area:
- *   - First child: (PADDING, PADDING)
- *   - Each subsequent child: (PADDING, prevBottom + STACK_GAP)
- *
- * The incoming card's width is clamped to fit within the parent
- * (parent.width - 2 * PADDING) when that is larger than MIN_W.
- *
- * Returns { x, y, width } in the parent's local coordinate space.
- */
-export function computeStackedPosition(
-  cards: Map<number, CardData>,
-  parentId: number,
-  cardWidth: number,
-): { x: number; y: number; width: number } {
-  const parent = cards.get(parentId)
-  const children = getChildren(cards, parentId)
-
-  const availableWidth = parent ? Math.max(MIN_W, parent.width - 2 * PADDING) : cardWidth
-  const w = Math.min(cardWidth, availableWidth)
-
-  if (children.length === 0) {
-    return { x: PADDING, y: PADDING, width: w }
-  }
-
-  // Find the bottom edge of the lowest existing child.
-  let maxBottom = 0
-  for (const child of children) {
-    maxBottom = Math.max(maxBottom, child.y + child.height)
-  }
-
-  return { x: PADDING, y: maxBottom + STACK_GAP, width: w }
-}
 
 /**
  * Return the absolute canvas-space center point of a card, accounting for the
@@ -484,6 +447,43 @@ export function computeEdgePoint(
 }
 
 /**
+ * Min-penetration collision: push `sibling` out of `mover` along the axis
+ * with the smallest overlap, adding a PADDING gap so cards land with breathing
+ * room rather than edge-to-edge. Returns new {x, y} for sibling, or null if
+ * there is no overlap.
+ *
+ * Internal helper -- not exported. Used by both applyPushMode and applyDropPush.
+ */
+function resolvePush(mover: CardData, sibling: CardData): { x: number; y: number } | null {
+  // Inflate the mover's bounding box by PADDING on all four sides before
+  // computing penetration. This guarantees a PADDING-wide gap at rest while
+  // pushing by only the raw penetration amount -- no overshoot, no oscillation.
+  const mL = mover.x - PADDING
+  const mR = mover.x + mover.width + PADDING
+  const mT = mover.y - PADDING
+  const mB = mover.y + mover.height + PADDING
+
+  const penR = mR - sibling.x
+  const penL = (sibling.x + sibling.width) - mL
+  const penD = mB - sibling.y
+  const penU = (sibling.y + sibling.height) - mT
+
+  if (penR <= 0 || penL <= 0 || penD <= 0 || penU <= 0) return null
+
+  const minX = Math.min(penR, penL)
+  const minY = Math.min(penD, penU)
+
+  if (minX <= minY) {
+    // Push by raw penetration -- no extra + PADDING (gap is baked into inflation)
+    const pushX = penR <= penL ? penR : -penL
+    return { x: sibling.x + pushX, y: sibling.y }
+  } else {
+    const pushY = penD <= penU ? penD : -penU
+    return { x: sibling.x, y: sibling.y + pushY }
+  }
+}
+
+/**
  * Push-mode: when Shift is held during drag, the dragged card pushes its
  * siblings out of the way using pure min-penetration collision resolution.
  *
@@ -511,30 +511,6 @@ export function applyPushMode(
   if (!dragged) return cards
 
   let updated = new Map(cards)
-
-  // ---------------------------------------------------------------------------
-  // Min-penetration collision: push `sibling` out of `mover` along the axis
-  // with the smallest overlap. Returns new {x, y} for sibling, or null.
-  // ---------------------------------------------------------------------------
-  function resolvePush(mover: CardData, sibling: CardData): { x: number; y: number } | null {
-    const penR = (mover.x + mover.width) - sibling.x
-    const penL = (sibling.x + sibling.width) - mover.x
-    const penD = (mover.y + mover.height) - sibling.y
-    const penU = (sibling.y + sibling.height) - mover.y
-
-    if (penR <= 0 || penL <= 0 || penD <= 0 || penU <= 0) return null
-
-    const minX = Math.min(penR, penL)
-    const minY = Math.min(penD, penU)
-
-    if (minX <= minY) {
-      const pushX = penR <= penL ? penR : -penL
-      return { x: sibling.x + pushX, y: sibling.y }
-    } else {
-      const pushY = penD <= penU ? penD : -penU
-      return { x: sibling.x, y: sibling.y + pushY }
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Push cascade at one nesting level: starting from `moverId`, push all
@@ -644,4 +620,68 @@ export function canvasToLocal(
     x: canvasX - parentAbs.x,
     y: canvasY - parentAbs.y - HEADER_HEIGHT,
   }
+}
+
+/**
+ * No-overlap on drop: after a card is reparented into a container that already
+ * has children, resolve any overlaps between the dropped card and its new
+ * siblings. The dropped card moves; existing siblings stay put.
+ *
+ * This is intentionally the inverse of push-mode: the newcomer is the one that
+ * relocates, so existing children are never disturbed by a drop. We achieve
+ * this by passing the sibling as the "mover" (fixed reference point) and the
+ * dropped card as the "sibling" (the card that gets displaced) in resolvePush.
+ *
+ * Algorithm:
+ * 1. Find the sibling with the largest overlap area with the dropped card.
+ * 2. Resolve: the dropped card moves away from that sibling.
+ * 3. Clamp the dropped card to PADDING inside its parent content area.
+ * 4. Repeat up to 20 iterations until no sibling overlaps remain.
+ *
+ * Does NOT call autoResizeParent -- that is the caller's responsibility.
+ */
+export function applyDropPush(
+  cards: Map<number, CardData>,
+  droppedId: number,
+): Map<number, CardData> {
+  const dropped = cards.get(droppedId)
+  if (!dropped || dropped.parentId === null) return cards
+
+  const parentId = dropped.parentId
+  let updated = new Map(cards)
+
+  for (let iteration = 0; iteration < 20; iteration++) {
+    const current = updated.get(droppedId)!
+    const siblings = Array.from(updated.values()).filter(
+      (c) => c.parentId === parentId && c.id !== droppedId
+    )
+
+    // Find the sibling with the largest overlap area.
+    let biggestSibling: CardData | null = null
+    let biggestArea = 0
+
+    for (const sibling of siblings) {
+      const overlapW = Math.min(current.x + current.width, sibling.x + sibling.width) - Math.max(current.x, sibling.x)
+      const overlapH = Math.min(current.y + current.height, sibling.y + sibling.height) - Math.max(current.y, sibling.y)
+      if (overlapW <= 0 || overlapH <= 0) continue
+      const area = overlapW * overlapH
+      if (area > biggestArea) {
+        biggestArea = area
+        biggestSibling = sibling
+      }
+    }
+
+    if (!biggestSibling) break // No overlaps -- done.
+
+    // Sibling is "mover" (fixed), dropped card is "sibling" (moves).
+    const resolved = resolvePush(biggestSibling, current)
+    if (!resolved) break
+
+    // Clamp to PADDING so the dropped card stays inside the parent content area.
+    const clampedX = Math.max(PADDING, resolved.x)
+    const clampedY = Math.max(PADDING, resolved.y)
+    updated.set(droppedId, { ...current, x: clampedX, y: clampedY })
+  }
+
+  return updated
 }

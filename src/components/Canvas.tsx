@@ -27,6 +27,7 @@ import {
   normalizeChildPositions,
   computeEdgePoint,
   applyPushMode,
+  applyDropPush,
   fitToContents,
   PADDING,
   BOTTOM_PADDING,
@@ -1303,6 +1304,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       // Normalize child positions (shift negative-coordinate children back inside padding).
       nextCards = normalizeChildPositions(nextCards, nestTargetId)
 
+      // No-overlap on drop: if the nest target already has children, move the
+      // dropped card so it doesn't overlap any sibling. Existing children stay
+      // put -- only the newcomer relocates. autoResizeParent runs below.
+      const existingChildCount = getChildren(new Map(cardsRef.current), nestTargetId).length
+      if (existingChildCount > 0) {
+        nextCards = applyDropPush(nextCards, cardId)
+      }
+
       // Issue 1 fix: resize bottom-up. If the card being nested is itself a
       // parent with children, its own dimensions must be correct BEFORE we ask
       // the new parent to fit around it. autoResizeParent(cardId) sizes the
@@ -1311,9 +1320,11 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const nestedHasChildren = getChildren(nextCards, cardId).length > 0
       if (nestedHasChildren) {
         nextCards = autoResizeParent(nextCards, cardId)
-      } else {
-        nextCards = autoResizeParent(nextCards, nestTargetId)
       }
+      // applyPushMode handles autoResizeParent + ancestor cascade in one pass:
+      // it resizes the immediate parent (nestTargetId) and then pushes any
+      // siblings of that parent that are now overlapping after it grew.
+      nextCards = applyPushMode(nextCards, cardId, 0, 0, 0, 0)
       // Also resize the old parent if the card had one (it may now be smaller).
       if (card.parentId !== null) {
         nextCards = autoResizeParent(nextCards, card.parentId)
@@ -1526,9 +1537,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     if (finalCard) {
       if (finalCard.parentId !== null) {
         // normalizeChildPositions may shift children; feed its result into
-        // autoResizeParent so the two operations see a consistent state.
+        // autoResizeParent/applyPushMode so the two operations see a consistent state.
+        // If shift was held during the drag, use applyPushMode so any ancestor that
+        // grew due to push-mode also cascades into its own siblings. For normal drags,
+        // plain autoResizeParent is correct -- no sibling pushing intended.
         const afterNorm = normalizeChildPositions(preMouseUpCards, finalCard.parentId)
-        const afterResize = autoResizeParent(afterNorm, finalCard.parentId)
+        const afterResize = shiftHeldDuringDragRef.current
+          ? applyPushMode(afterNorm, cardId, 0, 0, 0, 0)
+          : autoResizeParent(afterNorm, finalCard.parentId)
         const parentAfter = afterResize.get(finalCard.parentId)
         const parentBefore = preMouseUpCards.get(finalCard.parentId)
 
