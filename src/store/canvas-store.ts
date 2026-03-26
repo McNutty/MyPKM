@@ -22,8 +22,7 @@
 import type { CardData } from './types'
 import type { NodeWithLayout } from '../ipc'
 
-export const PADDING = 24
-export const BOTTOM_PADDING = 20  // Extra bottom buffer so children never clip the parent border
+export const PADDING = 20
 export const HEADER_HEIGHT = 28
 export const MIN_W = 100
 export const MIN_H = 50
@@ -230,7 +229,7 @@ export function resizeOneParent(
   }
 
   const neededW = Math.max(parent.width, maxRight + PADDING)
-  const neededH = Math.max(parent.height, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+  const neededH = Math.max(parent.height, HEADER_HEIGHT + maxBottom + PADDING)
 
   if (neededW === parent.width && neededH === parent.height) return cards
 

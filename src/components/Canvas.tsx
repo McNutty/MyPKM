@@ -30,7 +30,6 @@ import {
   applyDropPush,
   fitToContents,
   PADDING,
-  BOTTOM_PADDING,
   HEADER_HEIGHT,
   MIN_W,
   MIN_H,
@@ -673,7 +672,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               maxBottom = Math.max(maxBottom, kid.y + kid.height)
             }
             newW = Math.max(newW, maxRight + PADDING)
-            newH = Math.max(newH, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+            newH = Math.max(newH, HEADER_HEIGHT + maxBottom + PADDING)
           }
           setCards((prev) => {
             const updated = new Map(prev)
@@ -786,7 +785,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
             }
             // Children occupy local coords; add padding/header to get container minimums.
             const minWFromChildren = maxRight + PADDING
-            const minHFromChildren = HEADER_HEIGHT + maxBottom + BOTTOM_PADDING
+            const minHFromChildren = HEADER_HEIGHT + maxBottom + PADDING
             newW = Math.max(newW, minWFromChildren)
             newH = Math.max(newH, minHFromChildren)
           }
