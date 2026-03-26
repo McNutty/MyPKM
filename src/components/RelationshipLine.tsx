@@ -11,26 +11,21 @@
  *   Selected:   blue (#1976d2), slightly thicker
  *   Unlabeled:  dashed, faded (#aaa), italic "unlabeled" placeholder
  *
- * Curve geometry (sliding labels):
- *   The stored label position P is decomposed into two independent parameters:
- *     t  -- how far along the start->end baseline (clamped 0.05-0.95)
- *     d  -- perpendicular distance from the baseline midpoint
- *   The Bezier control point Q is always derived from d at the midpoint
- *   perpendicular, so moving the label parallel to the baseline ("sliding")
- *   never distorts the curve shape. The visual label position is Bezier(t).
+ * Curve geometry (label-first arc model):
+ *   The stored label position P IS the visual label position -- no error
+ *   correction needed. The Bezier control point Q is computed so the curve
+ *   passes exactly through P, rather than P being projected onto the curve.
  *
  *   Math:
- *     M = (start + end) / 2
- *     D = end - start,  len = |D|
- *     N = (-Dy/len, Dx/len)          // perpendicular unit normal
- *     t = clamp(dot(P-start,D) / dot(D,D), 0.05, 0.95)
- *     d = dot(P - M, N)
- *     Q = M + 2*d*N                  // control point, always at midpoint perp
- *     visual = Bezier(t) using Q
+ *     D = end - start,  lenSq = |D|^2
+ *     t = clamp(dot(P-start, D) / lenSq, 0.1, 0.9)
+ *     Q = (P - (1-t)^2 * start - t^2 * end) / (2*(1-t)*t)
  *
- *   At t=0.5 with label at midpoint perpendicular this is identical to the
- *   previous behavior. When label is dragged near an endpoint, t clamps and
- *   the curve shape stays clean.
+ *   This makes the Bezier curve B(t) = P exactly. The label sits right where
+ *   the user placed it and the curve bends to meet it. When P lies on the
+ *   baseline (d=0), Q is the midpoint -- a straight line. t is clamped to
+ *   [0.1, 0.9] to avoid division-by-zero near endpoints; the label can still
+ *   be placed anywhere visually.
  *
  * A wide transparent hit-area path (12px) sits behind the visible path to
  * make clicking the curve easy without requiring pixel-perfect aim.
@@ -52,13 +47,20 @@ export interface CardRect {
 // ============================================================================
 
 /**
- * Pure geometry helper. Given source/target card rects and a raw stored label
+ * Pure geometry helper. Given source/target card rects and a stored label
  * position P (absolute canvas space), returns all geometry needed to render
  * the Bezier curve and position the visual label.
  *
- * The key insight: Q (the Bezier control point) is always pinned to the
- * midpoint perpendicular axis, so sliding the label parallel to the baseline
- * never warps the curve. The label's visual position is Bezier(t).
+ * Key insight: the visual label position IS the stored position. No projection
+ * onto the curve, no error correction. Instead we compute the Bezier control
+ * point Q so the curve passes exactly through the label position P at
+ * parameter t (the label's projection onto the baseline).
+ *
+ *   Q = (P - (1-t)^2 * start - t^2 * end) / (2*(1-t)*t)
+ *
+ * t is clamped to [0.1, 0.9] to prevent the denominator from approaching zero
+ * near endpoints. The label div can still be positioned anywhere on screen --
+ * only the curve control point saturates, not the label position.
  */
 export function decomposeRelationshipGeometry(
   sourcePos: CardRect,
@@ -103,45 +105,31 @@ export function decomposeRelationshipGeometry(
   const lenSq = dx * dx + dy * dy
 
   // Degenerate case: source and target are essentially at the same point
-  // (e.g. a card connected to itself). Fall back to the original formula.
+  // (e.g. a card connected to itself). Q = 2P - midpoint of endpoints.
   if (lenSq < 1) {
     const ctrlX = 2 * labelX - 0.5 * start.x - 0.5 * end.x
     const ctrlY = 2 * labelY - 0.5 * start.y - 0.5 * end.y
     return { start, end, ctrlX, ctrlY, visualX: labelX, visualY: labelY }
   }
 
-  const len = Math.sqrt(lenSq)
-
-  // Midpoint M
-  const mx = (start.x + end.x) / 2
-  const my = (start.y + end.y) / 2
-
-  // Perpendicular unit normal N = (-dy/len, dx/len)
-  const nx = -dy / len
-  const ny = dx / len
-
-  // Decompose label position P into (t, d)
-  //   t = dot(P - start, D) / dot(D, D)   -- parallel component (0..1 along baseline)
-  //   d = dot(P - M, N)                    -- perpendicular offset from midpoint
+  // Project label P onto the baseline to get parameter t.
+  // t = dot(P - start, D) / |D|^2, clamped to [0.1, 0.9] to keep the
+  // denominator in the control-point formula well away from zero.
   const px = labelX - start.x
   const py = labelY - start.y
   const tRaw = (px * dx + py * dy) / lenSq
-  const t = Math.max(0.05, Math.min(0.95, tRaw))
+  const t = Math.max(0.1, Math.min(0.9, tRaw))
 
-  const qx = labelX - mx
-  const qy = labelY - my
-  const d = qx * nx + qy * ny
-
-  // Control point: always at midpoint perpendicular regardless of t
-  const ctrlX = mx + 2 * d * nx
-  const ctrlY = my + 2 * d * ny
-
-  // Visual label position: evaluate quadratic Bezier at t
+  // Compute control point Q such that the quadratic Bezier passes through
+  // the label position P at parameter t:
+  //   B(t) = (1-t)^2 * start + 2*(1-t)*t * Q + t^2 * end  ==>  solve for Q
   const u = 1 - t
-  const visualX = u * u * start.x + 2 * u * t * ctrlX + t * t * end.x
-  const visualY = u * u * start.y + 2 * u * t * ctrlY + t * t * end.y
+  const denom = 2 * u * t  // in [0.18, 0.5] for t in [0.1, 0.9]
+  const ctrlX = (labelX - u * u * start.x - t * t * end.x) / denom
+  const ctrlY = (labelY - u * u * start.y - t * t * end.y) / denom
 
-  return { start, end, ctrlX, ctrlY, visualX, visualY }
+  // The visual label position IS the stored position -- no projection needed.
+  return { start, end, ctrlX, ctrlY, visualX: labelX, visualY: labelY }
 }
 
 // ============================================================================

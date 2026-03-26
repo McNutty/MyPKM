@@ -1,7 +1,9 @@
 # New issues (these should be moved to handled when taken care of)
 
-(None currently -- add new issues here)
-
+- Manual resizing of cards should also enable Pushing Mode, so you can "make space" around a card by resizing it also. This all ties into the goal of "no overlaps". I think we will work a bit more on this actually, more changes incoming.
+- More work on arrows. I really want to try an easier transform. Right now it is too buggy, for example if the arrow becomes too twisted/curved and the label is close to an endpoint, it sometimes can be impossible to sort it out, dragging is barely moving the handle at all. The main point is that I want the moved label to stick to the pointer at all times, just as when you move a regular card. The current algorithm only works ok for labels near the middle. I'm willing to try a simpler curve with a "constant" radius that you can change by moving the label.
+- The default size for cards should be big enough to show the whole title.
+- Right now, pressing delete when editing a title deletes the card. Very annoying.
 # Handled issues (either solved in code or updated in documentation)
 
 - Multiple Models: Create, switch, rename, delete canvases. Left sidebar model picker. Rust backend with cascade delete. Fixed get_map_relationships to filter by map_id. Added map_id column to relationships with migration + backfill.
@@ -21,3 +23,9 @@
 8. Relationships created in Model A do not appear in Model B - OK!
 9. Switching models preserves each model's cards and layout across switches - OK!
 10. All M3 functionality still works (drag, nest, push mode, relationships, etc.) - OK!
+11. Delete key while editing a card title only deletes the character, not the card - OK!
+12. New cards are big enough to show their full default title
+	1. No, and I realize the requirement might have been a bit ambiguous. When a new card is created, it is created with a standard size, like before. And this new card is created with focus in the title field. The thing is, when you start to write in the title field, or paste something in, the card should *expand horizontally during the editing process* to fit the entire text. Also shrink if the user shortens the text (down to the original size). Then when you press enter (or click outside) the new expanded size is kept. This way we ensure that the whole title is always visible (unless you later manually resize the card after the fact). The process repeats if the user edits the title again later on, making it longer. But in this case the minimum size is the size the card had before editing. I realize that this solution is not perfect (you might get very long cards if the titles are long), but for now this is good enough. We can think of word wrapping and multi-line titles later on.
+13. Resizing a card pushes overlapping siblings out of the way (no Shift needed) - OK!
+14. Arrow label sticks to the pointer at all times when dragging, even near endpoints - OK!
+	1. Not only ok, but I think we might finally have cracked the arrow behavior. It seems perfect to me now, better than the original Plectica and better than any whiteboarding app I have ever tried!

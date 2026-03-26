@@ -35,8 +35,7 @@ import {
   MIN_H,
 } from '../store/canvas-store'
 import { Card } from './Card'
-import { RelationshipOverlay, decomposeRelationshipGeometry } from './RelationshipLine'
-import type { CardRect } from './RelationshipLine'
+import { RelationshipOverlay } from './RelationshipLine'
 import { db } from '../ipc'
 
 // ============================================================================
@@ -695,37 +694,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       if (draggingRelCardId !== null && relCardDragOffset) {
         const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
         const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+        // Store pointer position directly. decomposeRelationshipGeometry now
+        // computes the control point so the curve passes through the label,
+        // meaning visualX/Y == labelX/Y -- no error correction required.
         const newX = canvasX - relCardDragOffset.x
         const newY = canvasY - relCardDragOffset.y
-
-        // Correction: the stored position (newX, newY) is fed into
-        // decomposeRelationshipGeometry which returns a *visual* on-curve
-        // position that diverges from the raw position on curved arrows. We
-        // compute that divergence (error) and store a pre-corrected position
-        // so that the rendered visual lands exactly at the mouse.
-        const rel = relationshipsRef.current.find((r) => r.id === draggingRelCardId)
-        let correctedX = newX
-        let correctedY = newY
-        if (rel) {
-          const srcCard = cardsRef.current.get(rel.sourceId)
-          const tgtCard = cardsRef.current.get(rel.targetId)
-          if (srcCard && tgtCard) {
-            const srcAbs = getAbsolutePosition(cardsRef.current, rel.sourceId)
-            const tgtAbs = getAbsolutePosition(cardsRef.current, rel.targetId)
-            const sourceRect: CardRect = { x: srcAbs.x, y: srcAbs.y, width: srcCard.width, height: srcCard.height }
-            const targetRect: CardRect = { x: tgtAbs.x, y: tgtAbs.y, width: tgtCard.width, height: tgtCard.height }
-            const geom = decomposeRelationshipGeometry(sourceRect, targetRect, newX, newY)
-            // error = where the label would actually render minus where we want it
-            const errorX = geom.visualX - newX
-            const errorY = geom.visualY - newY
-            correctedX = newX - errorX
-            correctedY = newY - errorY
-          }
-        }
-
         setRelCardPositions((prev) => {
           const next = new Map(prev)
-          next.set(draggingRelCardId, { x: correctedX, y: correctedY })
+          next.set(draggingRelCardId, { x: newX, y: newY })
           return next
         })
         return
@@ -794,10 +770,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           // Update minWidth/minHeight in-memory during drag so that if
           // autoResizeParent fires on the parent chain the floor is already set.
           updated.set(resizeState.cardId, { ...card, width: newW, height: newH, minWidth: newW, minHeight: newH })
-          if (card.parentId !== null) {
-            return autoResizeParent(updated, card.parentId)
-          }
-          return updated
+
+          // Always-on push mode during resize: after growing the card, push any
+          // overlapping siblings out of the way. The card's position hasn't
+          // changed -- only its size -- so pass its absolute position as both
+          // prev and new. applyPushMode reads the card's current dimensions from
+          // the map (which now include the new width/height) to detect overlaps.
+          const absPos = getAbsolutePosition(updated, resizeState.cardId)
+          return applyPushMode(updated, resizeState.cardId, absPos.x, absPos.y, absPos.x, absPos.y)
         })
         return
       }
@@ -1231,6 +1211,9 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       // Persist resize. The card already has minWidth/minHeight set to its current
       // dimensions (updated during the drag in handleMouseMove), so we read them
       // back from state and write them through to the DB.
+      //
+      // Snapshot state before clearing so we can diff pushed siblings below.
+      const stateBefore = new Map(cardsRef.current)
       const card = cardsRef.current.get(resizeState.cardId)
       setResizeState(null)
 
@@ -1238,38 +1221,40 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         // Commit the floor: the post-resize size becomes the new minimum.
         const finalMinW = card.width
         const finalMinH = card.height
-        setCards((prev) => {
-          const updated = new Map(prev)
-          const c = updated.get(resizeState.cardId)
-          if (!c) return prev
-          updated.set(resizeState.cardId, { ...c, minWidth: finalMinW, minHeight: finalMinH })
-          return updated
-        })
+
+        // Build nextCards explicitly so we can diff for pushed-sibling persistence
+        // without waiting for a React re-render to update cardsRef.
+        const nextCards = new Map(cardsRef.current)
+        const c = nextCards.get(resizeState.cardId)
+        if (c) {
+          nextCards.set(resizeState.cardId, { ...c, minWidth: finalMinW, minHeight: finalMinH })
+        }
+        setCards(nextCards)
+
         try {
           await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height, finalMinW, finalMinH)
 
-          // Persist any ancestor whose size grew due to autoResizeParent being
-          // called during the resize drag. autoResizeParent fires on every
-          // mousemove and updates React state, but only the resized card was
-          // previously written to DB -- leaving parent sizes stale on reload.
-          if (card.parentId !== null) {
-            const ancestorWrites: Promise<void>[] = []
-            let ancestorId: number | null = card.parentId
-            while (ancestorId !== null) {
-              const ancestor = cardsRef.current.get(ancestorId)
-              if (!ancestor) break
-              ancestorWrites.push(
-                db.updateNodeLayout(
-                  ancestor.id, mapId,
-                  ancestor.x, ancestor.y,
-                  ancestor.width, ancestor.height,
-                  ancestor.minWidth, ancestor.minHeight
-                )
+          // Persist every card that changed during the resize: ancestors that grew
+          // via autoResizeParent, siblings that were pushed via applyPushMode,
+          // and ancestors of those siblings. We diff nextCards against stateBefore
+          // and write any card whose position or size changed (excluding the
+          // resized card itself, which was already written above).
+          const changedWrites: Promise<void>[] = []
+          for (const [id, nc] of nextCards) {
+            if (id === resizeState.cardId) continue
+            const before = stateBefore.get(id)
+            if (
+              !before ||
+              nc.x !== before.x || nc.y !== before.y ||
+              nc.width !== before.width || nc.height !== before.height ||
+              nc.minWidth !== before.minWidth || nc.minHeight !== before.minHeight
+            ) {
+              changedWrites.push(
+                db.updateNodeLayout(id, mapId, nc.x, nc.y, nc.width, nc.height, nc.minWidth, nc.minHeight)
               )
-              ancestorId = ancestor.parentId
             }
-            await Promise.all(ancestorWrites)
           }
+          await Promise.all(changedWrites)
 
           setError(null)
         } catch (err) {
@@ -1703,14 +1688,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
 
       try {
-        const id = await db.createNode(mapId, '', canvasX, canvasY, 150, 60)
+        const id = await db.createNode(mapId, '', canvasX, canvasY, 200, 80)
         const newCard: CardData = {
           id,
           content: '',
           x: canvasX,
           y: canvasY,
-          width: 150,
-          height: 60,
+          width: 200,
+          height: 80,
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
@@ -1935,6 +1920,11 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key === 'Delete' && selectedId !== null) {
+        // Guard: let the browser handle Delete normally when a text field is focused
+        const el = document.activeElement
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
+        if (el instanceof HTMLElement && el.isContentEditable) return
+
         // Don't double-trigger if the confirmation dialog is already showing
         if (deleteConfirm !== null) return
 
@@ -2051,14 +2041,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const canvasY = (lastMouseRef.current.clientY - rect.top - viewport.panY) / viewport.zoom
 
       try {
-        const id = await db.createNode(mapId, '', canvasX, canvasY, 150, 60)
+        const id = await db.createNode(mapId, '', canvasX, canvasY, 200, 80)
         const newCard: CardData = {
           id,
           content: '',
           x: canvasX,
           y: canvasY,
-          width: 150,
-          height: 60,
+          width: 200,
+          height: 80,
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
