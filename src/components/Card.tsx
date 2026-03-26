@@ -45,6 +45,7 @@ interface CardProps {
   onContentChange: (cardId: number, newContent: string) => void
   onResetSize: (cardId: number) => void
   onAutoFocusConsumed: () => void
+  onWidthChange: (cardId: number, newWidth: number) => void
   zoom: number
   ghostZIndex?: number
   /** Called when the user starts dragging from a connection handle */
@@ -79,6 +80,7 @@ export const Card: React.FC<CardProps> = React.memo(({
   onContentChange,
   onResetSize,
   onAutoFocusConsumed,
+  onWidthChange,
   zoom,
   ghostZIndex,
   onConnectStart,
@@ -100,6 +102,10 @@ export const Card: React.FC<CardProps> = React.memo(({
   const [editValue, setEditValue] = useState(card.content)
   const [isInResizeZone, setIsInResizeZone] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Width before the current editing session started -- card must not shrink below this.
+  const preEditWidthRef = useRef<number>(card.width)
+  // Hidden off-screen span used to measure raw text pixel width while typing.
+  const measurerRef = useRef<HTMLSpanElement>(null)
 
   // Keep editValue in sync when content changes externally (e.g. on load)
   useEffect(() => {
@@ -112,19 +118,28 @@ export const Card: React.FC<CardProps> = React.memo(({
   // We enter edit mode immediately and clear the signal so it doesn't re-trigger.
   useEffect(() => {
     if (newCardId === card.id) {
+      preEditWidthRef.current = card.width
       setIsEditing(true)
       onAutoFocusConsumed()
     }
-  }, [newCardId, card.id, onAutoFocusConsumed])
+  }, [newCardId, card.id, onAutoFocusConsumed, card.width])
 
-  // Focus the textarea whenever we enter edit mode
+  // Focus the textarea whenever we enter edit mode, and immediately measure
+  // the existing content so cards with long titles expand right on focus.
   useEffect(() => {
     if (isEditing && textareaRef.current) {
       textareaRef.current.focus()
       // Place cursor at end of existing content
       const len = textareaRef.current.value.length
       textareaRef.current.setSelectionRange(len, len)
+      // Measure existing content so a card with text wider than its current
+      // width expands immediately without requiring the user to type first.
+      measureAndResize(textareaRef.current.value)
     }
+  // measureAndResize is intentionally excluded -- it has card.width in its
+  // deps which changes when we resize, and we only want this to fire on
+  // isEditing transitions, not on every width update.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditing])
 
   const handleMouseDown = useCallback(
@@ -145,9 +160,10 @@ export const Card: React.FC<CardProps> = React.memo(({
     (e: React.MouseEvent) => {
       e.stopPropagation()
       onSelect(card.id)
+      preEditWidthRef.current = card.width
       setIsEditing(true)
     },
-    [card.id, onSelect]
+    [card.id, card.width, onSelect]
   )
 
   const commitEdit = useCallback(() => {
@@ -178,6 +194,29 @@ export const Card: React.FC<CardProps> = React.memo(({
   const handleTextareaMouseDown = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
   }, [])
+
+  // Measure the text in the hidden span and call onWidthChange if the card
+  // needs to grow (or shrink back to preEditWidth).
+  // headerPadding accounts for: 8px left + 8px right padding on the header div,
+  // plus room for the child-count badge area (gap 6 + ~30px for the badge text).
+  // In practice a constant of 48 covers both the padding and the badge safely.
+  const measureAndResize = useCallback((text: string) => {
+    if (!measurerRef.current) return
+    const headerPadding = 48
+    measurerRef.current.textContent = text || ' '
+    const textWidth = measurerRef.current.scrollWidth
+    const requiredWidth = textWidth + headerPadding
+    const newWidth = Math.max(preEditWidthRef.current, requiredWidth)
+    if (newWidth !== card.width) {
+      onWidthChange(card.id, newWidth)
+    }
+  }, [card.id, card.width, onWidthChange])
+
+  const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value
+    setEditValue(newValue)
+    measureAndResize(newValue)
+  }, [measureAndResize])
 
   // Purely visual -- no mousedown handling involved. Checks whether the cursor
   // is within the resize edge zone (bottom or right within RESIZE_EDGE px) and
@@ -285,7 +324,7 @@ export const Card: React.FC<CardProps> = React.memo(({
           <textarea
             ref={textareaRef}
             value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
+            onChange={handleEditChange}
             onBlur={handleTextareaBlur}
             onKeyDown={handleTextareaKeyDown}
             onMouseDown={handleTextareaMouseDown}
@@ -340,6 +379,25 @@ export const Card: React.FC<CardProps> = React.memo(({
         )}
       </div>
 
+      {/* Hidden off-screen span that mirrors the textarea's font so we can
+          measure raw text pixel width without affecting layout. */}
+      <span
+        ref={measurerRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          visibility: 'hidden',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          fontSize: titleFontSize,
+          fontFamily: 'inherit',
+          fontWeight: 600,
+          padding: 0,
+          left: -9999,
+          top: -9999,
+        }}
+      />
+
       {/* ------------------------------------------------------------------ */}
       {/* Content area -- children render here as absolutely-positioned cards */}
       {/* Double-click on the body (not on a child card) resets to default size */}
@@ -373,6 +431,7 @@ export const Card: React.FC<CardProps> = React.memo(({
               onContentChange={onContentChange}
               onResetSize={onResetSize}
               onAutoFocusConsumed={onAutoFocusConsumed}
+              onWidthChange={onWidthChange}
               zoom={zoom}
               onConnectStart={onConnectStart}
               isConnecting={isConnecting}

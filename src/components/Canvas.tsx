@@ -1688,14 +1688,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
 
       try {
-        const id = await db.createNode(mapId, '', canvasX, canvasY, 200, 80)
+        const id = await db.createNode(mapId, '', canvasX, canvasY, 200, 100)
         const newCard: CardData = {
           id,
           content: '',
           x: canvasX,
           y: canvasY,
           width: 200,
-          height: 80,
+          height: 100,
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
@@ -1734,6 +1734,17 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
       try {
         await db.updateNodeContent(cardId, newContent)
+        // Also persist the card's current width -- it may have grown during
+        // the editing session via handleWidthChange (auto-expand on typing).
+        const currentCard = cardsRef.current.get(cardId)
+        if (currentCard) {
+          await db.updateNodeLayout(
+            cardId, mapId,
+            currentCard.x, currentCard.y,
+            currentCard.width, currentCard.height,
+            currentCard.minWidth, currentCard.minHeight,
+          )
+        }
         setError(null)
       } catch (err) {
         console.error('[Canvas] Failed to update card content:', err)
@@ -1747,6 +1758,28 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           return prev
         })
       }
+    },
+    [mapId]
+  )
+
+  // ---------------------------------------------------------------------------
+  // WIDTH CHANGE (Card title auto-expand while typing)
+  // ---------------------------------------------------------------------------
+  // Called on every keystroke while editing a card title. Updates card width
+  // in state immediately (optimistic) and runs push-mode so the expanding card
+  // can nudge siblings. Width is not persisted here -- that happens in
+  // handleContentChange when the user commits the edit (Enter / blur).
+  const handleWidthChange = useCallback(
+    (cardId: number, newWidth: number) => {
+      setCards((prev) => {
+        const updated = new Map(prev)
+        const card = updated.get(cardId)
+        if (!card) return prev
+        updated.set(cardId, { ...card, width: newWidth })
+        // Run push mode so the widening card pushes any siblings out of the way.
+        const abs = getAbsolutePosition(updated, cardId)
+        return applyPushMode(updated, cardId, abs.x, abs.y, abs.x, abs.y)
+      })
     },
     []
   )
@@ -1802,10 +1835,19 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         }
         return
       } else {
-        // Leaf card: snap back to the same dimensions used when a new card is
-        // created (handleDoubleClick). Must stay in sync with that path.
-        resetW = 150
-        resetH = 60
+        // Leaf card: measure title text width so the card fits its content.
+        // Font parameters must match Card.tsx's measureAndResize exactly.
+        const fontSize = Math.max(10, Math.min(14, 14 / Math.max(1, card.depth * 0.3 + 0.7)))
+        const measurer = document.createElement('canvas')
+        const ctx = measurer.getContext('2d')
+        resetW = 200  // default creation width as fallback
+        if (ctx) {
+          ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`
+          const measured = ctx.measureText(card.content || '')
+          const headerPadding = 48  // matches Card.tsx measureAndResize headerPadding
+          resetW = Math.max(200, Math.ceil(measured.width) + headerPadding)
+        }
+        resetH = 100
       }
 
       // Optimistic update -- clear the floor (minWidth/minHeight = null) so
@@ -2041,14 +2083,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const canvasY = (lastMouseRef.current.clientY - rect.top - viewport.panY) / viewport.zoom
 
       try {
-        const id = await db.createNode(mapId, '', canvasX, canvasY, 200, 80)
+        const id = await db.createNode(mapId, '', canvasX, canvasY, 200, 100)
         const newCard: CardData = {
           id,
           content: '',
           x: canvasX,
           y: canvasY,
           width: 200,
-          height: 80,
+          height: 100,
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
@@ -2384,6 +2426,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
                 onContentChange={handleContentChange}
                 onResetSize={handleResetSize}
                 onAutoFocusConsumed={() => setNewCardId(null)}
+                onWidthChange={handleWidthChange}
                 zoom={viewport.zoom}
                 onConnectStart={handleConnectStart}
                 isConnecting={connectingState !== null}
@@ -2411,6 +2454,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               onContentChange={handleContentChange}
               onResetSize={handleResetSize}
               onAutoFocusConsumed={() => setNewCardId(null)}
+              onWidthChange={handleWidthChange}
               zoom={viewport.zoom}
               ghostZIndex={10000}
               isHovered={false}
