@@ -2,8 +2,10 @@
 
 - I want all card drops to use the new push-implementation. Right now it is only when cards are dropped *on a new parent* that triggers the push, not cards dropped on siblings in the same parent they already belong to. I think it would be most consistent to have all card drops feel the same. And I want them to use the *same* implementation, not just something similar. As an added bonus, we today have an autoexpand when a card is dropped near an parent edge, this would be replaced with push-mode, thus gaining the cascading push that is now missing from that situation.
 - We have a bug with cascading pushes when using Push-mode. The easiest way of replicating is this: Have two cards beside each other vertically ("A" and "B"). The top one ("A") has two children also arranged vertically ("C" is topmost and "D" below). If you then add a card to "C", it will expand and push D down. D will then *NOT* push the edge of A downwards into B, it will instead move outside the boundary of A and overlap B. This behavior is not present when you instead resize C downwards, then everything works as expected.
-- I want to refactor the db schema after removing the auto-shrink.
 # Handled issues (either solved in code or updated in documentation)
+
+- DB schema cleanup: Dropped min_width/min_height columns from layout table, removed from Rust struct/commands/SQL, cleaned frontend IPC.
+  - **Fixed:** Idempotent DROP COLUMN migration in db.rs. Removed from NodeWithLayout struct, all SQL queries, all command signatures. Frontend IPC no longer passes null params.
 
 - Multiple Models: Create, switch, rename, delete canvases. Left sidebar model picker. Rust backend with cascade delete. Fixed get_map_relationships to filter by map_id. Added map_id column to relationships with migration + backfill.
   - **Fixed:** 4 new Rust commands (create_map, get_all_maps, rename_map, delete_map). LeftSidebar component with inline rename, hover delete, create with auto-rename. Canvas keyed on mapId for clean reload on switch.
@@ -68,3 +70,10 @@
 26. Shift+drag push causes parent to grow — parent stays grown after releasing Shift- OK!
 27. Typing a long title grows the card — card does NOT shrink when shortening the text (until double-click reset) - OK!
 28. Drop-push into parent — parent grows if needed — stays at new size - OK!
+29. Cascade: A has children C, D. B below A. Drop card into C → C grows → D pushed → A grows → B pushed (no escaping) - OK!
+30. Same-parent drop: move card within parent, drop on sibling → pushed away with gap - OK!
+31. Same-parent cascade: same as above, parent grows → parent's siblings get pushed - OK!
+32. Resize cascade still works: resize C downward → D pushed → A grows → B pushed- OK!
+33. Title expand in nested card → cascade propagates upward correctly - OK!
+34. Root-level drop: cards without a parent — no push, just normal move - OK!
+35. Shift+drag still smooth with 24px gap (no regression) - OK!

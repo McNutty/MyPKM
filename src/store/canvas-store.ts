@@ -201,6 +201,44 @@ export function autoResizeFromCard(
   return autoResizeParent(cards, card.parentId)
 }
 
+/**
+ * Resize exactly ONE parent card to contain its direct children (grow-only).
+ * Does NOT walk further up the ancestor chain -- that is the caller's
+ * responsibility. Returns the updated map. If the parent has no children or
+ * does not need to grow, returns the same map reference unchanged.
+ *
+ * Extracted from the body of autoResizeParent's while-loop so that
+ * applyPushMode can interleave resize + push at each ancestor level
+ * (see Phase 2 of applyPushMode).
+ */
+export function resizeOneParent(
+  cards: Map<number, CardData>,
+  parentId: number
+): Map<number, CardData> {
+  const parent = cards.get(parentId)
+  if (!parent) return cards
+
+  const children = getChildren(cards, parentId)
+  if (children.length === 0) return cards
+
+  let maxRight = 0
+  let maxBottom = 0
+
+  for (const child of children) {
+    maxRight = Math.max(maxRight, child.x + child.width)
+    maxBottom = Math.max(maxBottom, child.y + child.height)
+  }
+
+  const neededW = Math.max(parent.width, maxRight + PADDING)
+  const neededH = Math.max(parent.height, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+
+  if (neededW === parent.width && neededH === parent.height) return cards
+
+  const updated = new Map(cards)
+  updated.set(parentId, { ...parent, width: neededW, height: neededH })
+  return updated
+}
+
 export function autoResizeParent(
   cards: Map<number, CardData>,
   parentId: number
@@ -208,38 +246,12 @@ export function autoResizeParent(
   let updated = new Map(cards)
   let currentParentId: number | null = parentId
 
-  // Walk up the parent chain
+  // Walk up the parent chain, resizing one level at a time.
   while (currentParentId !== null) {
     const parent = updated.get(currentParentId)
     if (!parent) break
 
-    const children = getChildren(updated, currentParentId)
-    if (children.length === 0) {
-      currentParentId = parent.parentId
-      continue
-    }
-
-    // Compute bounding box of children
-    let maxRight = 0
-    let maxBottom = 0
-
-    for (const child of children) {
-      maxRight = Math.max(maxRight, child.x + child.width)
-      maxBottom = Math.max(maxBottom, child.y + child.height)
-    }
-
-    // Grow-only: use the card's current size as the floor.
-    // autoResizeParent never shrinks a card -- only expands it to contain children.
-    // Users explicitly shrink via double-click fit-to-contents.
-    const neededW = Math.max(parent.width, maxRight + PADDING)
-    const neededH = Math.max(parent.height, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
-
-    const newW = neededW
-    const newH = neededH
-
-    if (newW !== parent.width || newH !== parent.height) {
-      updated.set(currentParentId, { ...parent, width: newW, height: newH })
-    }
+    updated = resizeOneParent(updated, currentParentId)
 
     currentParentId = parent.parentId
   }
@@ -552,26 +564,29 @@ export function applyPushMode(
   updated = pushCascade(updated, draggedId)
 
   // ---------------------------------------------------------------------------
-  // Phase 2: auto-resize parent + ancestor push cascade
+  // Phase 2: interleaved resize + push cascade up the ancestor chain.
+  //
+  // The previous approach called autoResizeParent (which sizes ALL ancestors
+  // in one pass) and then ran pushCascade at each level separately. This was
+  // wrong: autoResizeParent sizes ancestor A while sibling D is still at its
+  // old position. Then pushCascade(C) pushes D past A's edge, but A's height
+  // is already frozen.
+  //
+  // The fix: at each ancestor level, first resize that single level to contain
+  // its children (resizeOneParent), THEN push that level's siblings. Only then
+  // move to the next ancestor. This way each resize sees the siblings in their
+  // post-push positions from the level below.
   // ---------------------------------------------------------------------------
   const card = updated.get(draggedId)
   if (card && card.parentId !== null) {
     const immediateParentId = card.parentId
 
-    // Expand the parent (and ancestors) to contain children.
-    // autoResizeParent is already grow-only, so no floor tracking needed.
-    updated = autoResizeParent(updated, immediateParentId)
-
-    // Walk up ancestors: if an ancestor grew and now overlaps its siblings,
-    // push them. We must visit every ancestor in the chain because
-    // autoResizeParent already grew all of them -- each one may independently
-    // overlap its own siblings regardless of whether a lower level changed.
     let ancestorId: number | null = immediateParentId
     while (ancestorId !== null) {
+      updated = resizeOneParent(updated, ancestorId)   // grow this one level
+      updated = pushCascade(updated, ancestorId)       // push this level's siblings
       const ancestor = updated.get(ancestorId)
       if (!ancestor) break
-
-      updated = pushCascade(updated, ancestorId)
       ancestorId = ancestor.parentId
     }
   }

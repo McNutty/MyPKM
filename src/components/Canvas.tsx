@@ -1502,27 +1502,48 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     if (finalCard) {
       if (finalCard.parentId !== null) {
         // normalizeChildPositions may shift children; feed its result into
-        // autoResizeParent/applyPushMode so the two operations see a consistent state.
-        // If shift was held during the drag, use applyPushMode so any ancestor that
-        // grew due to push-mode also cascades into its own siblings. For normal drags,
-        // plain autoResizeParent is correct -- no sibling pushing intended.
+        // the overlap-resolution and resize pass so all operations see a
+        // consistent state.
+        //
+        // For shift-held (push mode): applyPushMode handles sibling pushing +
+        // ancestor resize + ancestor cascade in one pass.
+        //
+        // For normal drags: applyDropPush first relocates the dragged card away
+        // from any sibling it now overlaps (same behavior as a new-parent drop),
+        // then applyPushMode handles parent resize + ancestor cascade. This makes
+        // same-parent drops resolve overlaps the same way as new-parent drops.
+        // applyPushMode already calls resizeOneParent at each ancestor level
+        // internally, so no separate autoResizeParent call is needed.
         const afterNorm = normalizeChildPositions(preMouseUpCards, finalCard.parentId)
-        const afterResize = shiftHeldDuringDragRef.current
-          ? applyPushMode(afterNorm, cardId, 0, 0, 0, 0)
-          : autoResizeParent(afterNorm, finalCard.parentId)
+        let afterResize: Map<number, CardData>
+        if (shiftHeldDuringDragRef.current) {
+          afterResize = applyPushMode(afterNorm, cardId, 0, 0, 0, 0)
+        } else {
+          let nextCards = applyDropPush(afterNorm, cardId)
+          nextCards = applyPushMode(nextCards, cardId, 0, 0, 0, 0)
+          afterResize = nextCards
+        }
         const parentAfter = afterResize.get(finalCard.parentId)
         const parentBefore = preMouseUpCards.get(finalCard.parentId)
 
         // Determine which cards actually changed so we only write what changed.
         // normalizeChildPositions may have shifted children (left/up overflow fix),
-        // and autoResizeParent may have grown the parent -- either or both may apply.
+        // autoResizeParent / applyPushMode may have grown the parent, and
+        // applyDropPush may have repositioned the dragged card -- any of these
+        // should trigger a state update + persist pass.
         const normChanged = afterNorm !== preMouseUpCards
         const resizeChanged =
           parentAfter &&
           parentBefore &&
           (parentAfter.width !== parentBefore.width || parentAfter.height !== parentBefore.height)
+        const draggedAfter = afterResize.get(cardId)
+        const draggedBefore = preMouseUpCards.get(cardId)
+        const dropPushChanged =
+          draggedAfter &&
+          draggedBefore &&
+          (draggedAfter.x !== draggedBefore.x || draggedAfter.y !== draggedBefore.y)
 
-        if (normChanged || resizeChanged) {
+        if (normChanged || resizeChanged || dropPushChanged) {
           setCards(afterResize)
 
           // Persist all cards that differ from the pre-drag snapshot (covers
