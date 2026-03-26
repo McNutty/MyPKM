@@ -35,8 +35,6 @@ export class StubDb implements DbInterface {
       y,
       width,
       height,
-      min_width: null,
-      min_height: null,
     }
     this.nodes.set(id, node)
     return id
@@ -55,12 +53,10 @@ export class StubDb implements DbInterface {
     y: number,
     width: number,
     height: number,
-    minWidth: number | null,
-    minHeight: number | null
   ): Promise<void> {
     const node = this.nodes.get(nodeId)
     if (!node) throw new Error(`Node ${nodeId} not found`)
-    this.nodes.set(nodeId, { ...node, x, y, width, height, min_width: minWidth, min_height: minHeight })
+    this.nodes.set(nodeId, { ...node, x, y, width, height })
   }
 
   async updateNodeParent(
@@ -71,8 +67,6 @@ export class StubDb implements DbInterface {
     y: number,
     width: number,
     height: number,
-    minWidth: number | null,
-    minHeight: number | null
   ): Promise<void> {
     const node = this.nodes.get(nodeId)
     if (!node) throw new Error(`Node ${nodeId} not found`)
@@ -97,7 +91,7 @@ export class StubDb implements DbInterface {
       }
     }
 
-    this.nodes.set(nodeId, { ...node, parent_id: newParentId, x, y, width, height, min_width: minWidth, min_height: minHeight })
+    this.nodes.set(nodeId, { ...node, parent_id: newParentId, x, y, width, height })
   }
 
   async deleteNode(nodeId: number): Promise<void> {

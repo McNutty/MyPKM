@@ -21,8 +21,6 @@ export interface NodeWithLayout {
   y: number
   width: number
   height: number
-  min_width: number | null
-  min_height: number | null
 }
 
 /**
@@ -42,7 +40,7 @@ export interface DbInterface {
   getMapNodes(mapId: number): Promise<NodeWithLayout[]>
   createNode(mapId: number, content: string, x: number, y: number, width: number, height: number): Promise<number>
   updateNodeContent(nodeId: number, content: string): Promise<void>
-  updateNodeLayout(nodeId: number, mapId: number, x: number, y: number, width: number, height: number, minWidth: number | null, minHeight: number | null): Promise<void>
+  updateNodeLayout(nodeId: number, mapId: number, x: number, y: number, width: number, height: number): Promise<void>
   /**
    * Reparent a node and update its layout atomically.
    * Pass `newParentId = null` to unnest a card to top level.
@@ -50,7 +48,7 @@ export interface DbInterface {
    * returns a descriptive error string on violation -- callers should surface
    * that string to the user and revert in-memory state.
    */
-  updateNodeParent(nodeId: number, newParentId: number | null, mapId: number, x: number, y: number, width: number, height: number, minWidth: number | null, minHeight: number | null): Promise<void>
+  updateNodeParent(nodeId: number, newParentId: number | null, mapId: number, x: number, y: number, width: number, height: number): Promise<void>
   deleteNode(nodeId: number): Promise<void>
   /**
    * Delete a node and its entire descendant subtree in one transaction.

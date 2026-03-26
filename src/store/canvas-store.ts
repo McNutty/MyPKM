@@ -58,8 +58,6 @@ export function nodeWithLayoutToCardData(node: NodeWithLayout, depth = 0): CardD
     parentId: node.parent_id,
     depth,
     color: getDepthColor(depth),
-    minWidth: node.min_width,
-    minHeight: node.min_height,
   }
 }
 
@@ -230,16 +228,14 @@ export function autoResizeParent(
       maxBottom = Math.max(maxBottom, child.y + child.height)
     }
 
-    // Respect any manually-set size floor. If the parent has been manually
-    // resized, minWidth/minHeight record that floor so autoResizeParent never
-    // shrinks it back below the user's chosen size.
-    const floorW = parent.minWidth ?? MIN_W
-    const floorH = parent.minHeight ?? MIN_H
-    const neededW = Math.max(floorW, maxRight + PADDING)
-    const neededH = Math.max(floorH, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
+    // Grow-only: use the card's current size as the floor.
+    // autoResizeParent never shrinks a card -- only expands it to contain children.
+    // Users explicitly shrink via double-click fit-to-contents.
+    const neededW = Math.max(parent.width, maxRight + PADDING)
+    const neededH = Math.max(parent.height, HEADER_HEIGHT + maxBottom + BOTTOM_PADDING)
 
-    const newW = Math.max(floorW, neededW)
-    const newH = Math.max(floorH, neededH)
+    const newW = neededW
+    const newH = neededH
 
     if (newW !== parent.width || newH !== parent.height) {
       updated.set(currentParentId, { ...parent, width: newW, height: newH })
@@ -263,8 +259,6 @@ export function autoResizeParent(
  *    shift by the same delta, preserving their relative layout.
  * 3. Resize the parent to: width = contentW + 2*PADDING,
  *    height = HEADER_HEIGHT + contentH + 2*PADDING.
- * 4. Clear the size floor (minWidth/minHeight = null) so future auto-resize
- *    can shrink freely.
  *
  * Returns the updated Map.  Does nothing if the parent has no children.
  */
@@ -305,10 +299,10 @@ export function fitToContents(
     }
   }
 
-  // Step 3 & 4: resize parent to equal-margin fit, clear floor.
+  // Step 3: resize parent to equal-margin fit.
   const newW = Math.max(MIN_W, contentW + 2 * PADDING)
   const newH = Math.max(MIN_H, HEADER_HEIGHT + contentH + 2 * PADDING)
-  updated.set(parentId, { ...parent, width: newW, height: newH, minWidth: null, minHeight: null })
+  updated.set(parentId, { ...parent, width: newW, height: newH })
 
   return updated
 }
@@ -563,24 +557,10 @@ export function applyPushMode(
   const card = updated.get(draggedId)
   if (card && card.parentId !== null) {
     const immediateParentId = card.parentId
-    const parentBefore = updated.get(immediateParentId)
-    const sizeBefore = parentBefore ? { w: parentBefore.width, h: parentBefore.height } : null
 
     // Expand the parent (and ancestors) to contain children.
+    // autoResizeParent is already grow-only, so no floor tracking needed.
     updated = autoResizeParent(updated, immediateParentId)
-
-    // Set size floor on immediate parent only (so it doesn't auto-shrink
-    // while the user is still dragging).
-    if (sizeBefore) {
-      const parentAfter = updated.get(immediateParentId)
-      if (parentAfter && (parentAfter.width > sizeBefore.w || parentAfter.height > sizeBefore.h)) {
-        updated.set(immediateParentId, {
-          ...parentAfter,
-          minWidth: parentAfter.width,
-          minHeight: parentAfter.height,
-        })
-      }
-    }
 
     // Walk up ancestors: if an ancestor grew and now overlaps its siblings,
     // push them. We must visit every ancestor in the chain because

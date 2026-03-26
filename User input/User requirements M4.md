@@ -1,7 +1,8 @@
 # New issues (these should be moved to handled when taken care of)
 
-- Remove auto-shrink. Right now we have this functionality that cards that haven't "manually" changed size (by dragging the corner, or being extended by push-mode) will autoshrink when appropriate. But this is often jarring, and it is hard to keep track of what cards will do this, since it is hard to remember what cards are manually extended. Also, since the "double click parent to fit to contents" works so well, I think that is enough. I'm envisioning that this change would actually decrease complexity, since we now handle all cards the same, regardless if they have been resized previously or not. I also suspect that this will fix a subtle bug I've discovered, more on that later.
-- I want all card drops to use the new push-implementation. Right now it is only when cards are dropped *on a new parent* that triggers the push, not cards dropped on siblings in the same parent they already belong to. I think it would be most consistent to have all card drops feel the same. And I want them to use the *same* implementation, not just something similar.
+- I want all card drops to use the new push-implementation. Right now it is only when cards are dropped *on a new parent* that triggers the push, not cards dropped on siblings in the same parent they already belong to. I think it would be most consistent to have all card drops feel the same. And I want them to use the *same* implementation, not just something similar. As an added bonus, we today have an autoexpand when a card is dropped near an parent edge, this would be replaced with push-mode, thus gaining the cascading push that is now missing from that situation.
+- We have a bug with cascading pushes when using Push-mode. The easiest way of replicating is this: Have two cards beside each other vertically ("A" and "B"). The top one ("A") has two children also arranged vertically ("C" is topmost and "D" below). If you then add a card to "C", it will expand and push D down. D will then *NOT* push the edge of A downwards into B, it will instead move outside the boundary of A and overlap B. This behavior is not present when you instead resize C downwards, then everything works as expected.
+- I want to refactor the db schema after removing the auto-shrink.
 # Handled issues (either solved in code or updated in documentation)
 
 - Multiple Models: Create, switch, rename, delete canvases. Left sidebar model picker. Rust backend with cascade delete. Fixed get_map_relationships to filter by map_id. Added map_id column to relationships with migration + backfill.
@@ -14,6 +15,8 @@
   - **Fixed:** New `applyDropPush` function resolves drop overlaps. `resolvePush` extracted to module scope with inflated mover rect for smooth 24px buffer. NEST branch now calls `applyPushMode` for full cascade. Dead code removed (`STACK_GAP`, `computeStackedPosition`).
 - Push buffer margin: Cards maintain a 24px gap after push (not edge-to-edge). Applies to Shift+drag, resize push, and drop-push.
   - **Fixed:** `resolvePush` inflates mover bounding box by PADDING before computing overlap penetration, achieving smooth continuous gap without oscillation.
+- Remove auto-shrink: All cards now behave the same — grow to fit children, never auto-shrink. Explicit shrink via double-click fit-to-contents only. minWidth/minHeight tracking removed from frontend.
+  - **Fixed:** `autoResizeParent` is now grow-only (uses current size as floor). Removed `minWidth`/`minHeight` from CardData, all canvas handlers, IPC layer. Removed fitToContents call on empty-parent drop. DB columns left inert (migration pending).
 
 # Requirements testing
 
@@ -57,3 +60,11 @@
 22. Resizing a card into a sibling also produces a buffer gap (not edge-to-edge) - OK!
 	1. Yes, but the same jerkyness as issue 17.
 	2. Now working!
+23. Parents grow to fit children but never auto-shrink (all cards behave the same regardless of manual resize history) - OK!
+	1. With one exception, dropping a card into a empty card that is bigger, will auto-shrink the new parent.
+	2. Now working!
+24. Double-click fit-to-contents still shrinks parent to fit children - OK!
+25. Manual resize still works and size persists - OK!
+26. Shift+drag push causes parent to grow — parent stays grown after releasing Shift- OK!
+27. Typing a long title grows the card — card does NOT shrink when shortening the text (until double-click reset) - OK!
+28. Drop-push into parent — parent grows if needed — stays at new size - OK!

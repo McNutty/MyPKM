@@ -679,9 +679,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
             const updated = new Map(prev)
             const c = updated.get(pending.cardId)
             if (!c) return prev
-            // Set the floor immediately so autoResizeParent respects it even on
-            // the very first frame of a resize drag.
-            updated.set(pending.cardId, { ...c, width: newW, height: newH, minWidth: newW, minHeight: newH })
+            updated.set(pending.cardId, { ...c, width: newW, height: newH })
             if (c.parentId !== null) {
               return autoResizeParent(updated, c.parentId)
             }
@@ -798,9 +796,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           const updated = new Map(prev)
           const card = updated.get(resizeState.cardId)
           if (!card) return prev
-          // Update minWidth/minHeight in-memory during drag so that if
-          // autoResizeParent fires on the parent chain the floor is already set.
-          updated.set(resizeState.cardId, { ...card, width: newW, height: newH, minWidth: newW, minHeight: newH })
+          updated.set(resizeState.cardId, { ...card, width: newW, height: newH })
 
           // Always-on push mode during resize: after growing the card, push any
           // overlapping siblings out of the way. The card's position hasn't
@@ -1155,35 +1151,21 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     }
 
     if (resizeState) {
-      // Persist resize. The card already has minWidth/minHeight set to its current
-      // dimensions (updated during the drag in handleMouseMove), so we read them
-      // back from state and write them through to the DB.
-      //
       // Snapshot state before clearing so we can diff pushed siblings below.
       const stateBefore = new Map(cardsRef.current)
       const card = cardsRef.current.get(resizeState.cardId)
       setResizeState(null)
 
       if (card) {
-        // Commit the floor: the post-resize size becomes the new minimum.
-        const finalMinW = card.width
-        const finalMinH = card.height
-
-        // Build nextCards explicitly so we can diff for pushed-sibling persistence
-        // without waiting for a React re-render to update cardsRef.
         const nextCards = new Map(cardsRef.current)
-        const c = nextCards.get(resizeState.cardId)
-        if (c) {
-          nextCards.set(resizeState.cardId, { ...c, minWidth: finalMinW, minHeight: finalMinH })
-        }
         setCards(nextCards)
 
         try {
-          await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height, finalMinW, finalMinH)
+          await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height)
 
           // Persist every card that changed during the resize: ancestors that grew
           // via autoResizeParent, siblings that were pushed via applyPushMode,
-          // and ancestors of those siblings. We diff nextCards against stateBefore
+          // and ancestors of those siblings. Diff nextCards against stateBefore
           // and write any card whose position or size changed (excluding the
           // resized card itself, which was already written above).
           const changedWrites: Promise<void>[] = []
@@ -1193,11 +1175,10 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
             if (
               !before ||
               nc.x !== before.x || nc.y !== before.y ||
-              nc.width !== before.width || nc.height !== before.height ||
-              nc.minWidth !== before.minWidth || nc.minHeight !== before.minHeight
+              nc.width !== before.width || nc.height !== before.height
             ) {
               changedWrites.push(
-                db.updateNodeLayout(id, mapId, nc.x, nc.y, nc.width, nc.height, nc.minWidth, nc.minHeight)
+                db.updateNodeLayout(id, mapId, nc.x, nc.y, nc.width, nc.height)
               )
             }
           }
@@ -1207,7 +1188,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         } catch (err) {
           console.error('[Canvas] Failed to persist resize:', err)
           setError('Failed to save resize. Changes may be lost.')
-          // Revert: restore the pre-resize size and clear the floor
+          // Revert: restore the pre-resize size
           setCards((prev) => {
             const updated = new Map(prev)
             const current = updated.get(resizeState.cardId)
@@ -1216,8 +1197,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               ...current,
               width: resizeState.startWidth,
               height: resizeState.startHeight,
-              minWidth: null,
-              minHeight: null,
             })
             return updated
           })
@@ -1237,7 +1216,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     // M1: NESTING DISABLED -- just persist the new position
     if (!NESTING_ENABLED) {
       try {
-        await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight)
+        await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height)
         setError(null)
       } catch (err) {
         console.error('[Canvas] Failed to persist drag position:', err)
@@ -1330,15 +1309,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         nextCards = autoResizeParent(nextCards, card.parentId)
       }
 
-      // Drop onto an empty card: apply fit-to-contents so the newly-created
-      // parent wraps the dropped card with equal margins on all four sides.
-      // `target` was captured before the drop, so target's children count of 0
-      // means the nest target was empty before this card was dropped onto it.
-      const targetWasEmpty = getChildren(new Map(cardsRef.current), nestTargetId).length === 0
-      if (targetWasEmpty) {
-        nextCards = fitToContents(nextCards, nestTargetId)
-      }
-
       setCards(nextCards)
 
       // Persist: updateNodeParent atomically sets parent_id and layout coordinates
@@ -1354,8 +1324,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           finalCard.y,
           finalCard.width,
           finalCard.height,
-          finalCard.minWidth,
-          finalCard.minHeight
         )
         // Persist all cards whose size changed due to autoResizeParent (parents
         // and ancestors of the nest target, and possibly the old parent). Without
@@ -1368,11 +1336,10 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           if (
             !before ||
             c.x !== before.x || c.y !== before.y ||
-            c.width !== before.width || c.height !== before.height ||
-            c.minWidth !== before.minWidth || c.minHeight !== before.minHeight
+            c.width !== before.width || c.height !== before.height
           ) {
             ancestorWrites.push(
-              db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
+              db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height)
             )
           }
         }
@@ -1482,8 +1449,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               finalCard.y,
               finalCard.width,
               finalCard.height,
-              finalCard.minWidth,
-              finalCard.minHeight
             )
             // Persist all cards whose size changed due to autoResizeParent (old
             // parent shrinks when a card leaves it). Without this, the old parent
@@ -1494,7 +1459,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               const before = stateBefore.get(id)
               if (!before || c.width !== before.width || c.height !== before.height) {
                 ancestorWrites.push(
-                  db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight)
+                  db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height)
                 )
               }
             }
@@ -1573,7 +1538,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               card.width !== before.width ||
               card.height !== before.height
             ) {
-              writes.push(db.updateNodeLayout(id, mapId, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
+              writes.push(db.updateNodeLayout(id, mapId, card.x, card.y, card.width, card.height))
             }
           }
           try {
@@ -1605,7 +1570,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           card.width !== before.width ||
           card.height !== before.height
         ) {
-          writes.push(db.updateNodeLayout(id, mapId, card.x, card.y, card.width, card.height, card.minWidth, card.minHeight))
+          writes.push(db.updateNodeLayout(id, mapId, card.x, card.y, card.width, card.height))
         }
       }
       if (writes.length > 0) {
@@ -1619,7 +1584,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       } else {
         // Fallback: just persist the dragged card if the snapshot was unavailable.
         try {
-          await db.updateNodeLayout(finalCard.id, mapId, finalCard.x, finalCard.y, finalCard.width, finalCard.height, finalCard.minWidth, finalCard.minHeight)
+          await db.updateNodeLayout(finalCard.id, mapId, finalCard.x, finalCard.y, finalCard.width, finalCard.height)
           setError(null)
         } catch (err) {
           console.error('[Canvas] Failed to persist drag position (layout-only fallback):', err)
@@ -1661,8 +1626,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
-          minWidth: null,
-          minHeight: null,
         }
         setCards((prev) => {
           const updated = new Map(prev)
@@ -1704,7 +1667,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
             cardId, mapId,
             currentCard.x, currentCard.y,
             currentCard.width, currentCard.height,
-            currentCard.minWidth, currentCard.minHeight,
           )
         }
         setError(null)
@@ -1777,9 +1739,8 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
             if (!before) continue
             const posChanged = c.x !== before.x || c.y !== before.y
             const sizeChanged = c.width !== before.width || c.height !== before.height
-            const floorChanged = c.minWidth !== before.minWidth || c.minHeight !== before.minHeight
-            if (posChanged || sizeChanged || floorChanged) {
-              writes.push(db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height, c.minWidth, c.minHeight))
+            if (posChanged || sizeChanged) {
+              writes.push(db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height))
             }
           }
           await Promise.all(writes)
@@ -1812,13 +1773,12 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         resetH = 100
       }
 
-      // Optimistic update -- clear the floor (minWidth/minHeight = null) so
-      // autoResizeParent can shrink this card freely from now on.
+      // Optimistic update.
       setCards((prev) => {
         let updated = new Map(prev)
         const c = updated.get(cardId)
         if (!c) return prev
-        updated.set(cardId, { ...c, width: resetW, height: resetH, minWidth: null, minHeight: null })
+        updated.set(cardId, { ...c, width: resetW, height: resetH })
         // If the card has a parent, re-run auto-resize so the parent adjusts.
         if (c.parentId !== null) {
           updated = autoResizeParent(updated, c.parentId)
@@ -1826,9 +1786,9 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         return updated
       })
 
-      // Persist -- floor cleared (null, null).
+      // Persist.
       try {
-        await db.updateNodeLayout(cardId, mapId, card.x, card.y, resetW, resetH, null, null)
+        await db.updateNodeLayout(cardId, mapId, card.x, card.y, resetW, resetH)
         setError(null)
       } catch (err) {
         console.error('[Canvas] Failed to persist reset size:', err)
@@ -1838,7 +1798,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           const updated = new Map(prev)
           const c = updated.get(cardId)
           if (!c) return prev
-          updated.set(cardId, { ...c, width: card.width, height: card.height, minWidth: card.minWidth, minHeight: card.minHeight })
+          updated.set(cardId, { ...c, width: card.width, height: card.height })
           return updated
         })
       }
@@ -2056,8 +2016,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
-          minWidth: null,
-          minHeight: null,
         }
         setCards((prev) => {
           const updated = new Map(prev)
