@@ -1732,7 +1732,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   // RESET CARD SIZE (double-click on card body)
   // ---------------------------------------------------------------------------
   const handleResetSize = useCallback(
-    async (cardId: number) => {
+    async (cardId: number, shiftKey: boolean) => {
       const card = cardsRef.current.get(cardId)
       if (!card) return
 
@@ -1748,10 +1748,20 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         // fitToContents handles the shift + resize + floor clear in one step.
         const stateBefore = new Map(cardsRef.current)
 
-        const nextCards = fitToContents(cardsRef.current, cardId)
+        // Start with fitToContents on the target card, then -- if Shift was
+        // held -- cascade fitToContents upward through every ancestor so the
+        // whole ancestor chain tightens to its contents in one pass.
+        let nextCards = fitToContents(cardsRef.current, cardId)
+        if (shiftKey) {
+          let ancestorId = nextCards.get(cardId)?.parentId ?? null
+          while (ancestorId !== null) {
+            nextCards = fitToContents(nextCards, ancestorId)
+            ancestorId = nextCards.get(ancestorId)?.parentId ?? null
+          }
+        }
         setCards(nextCards)
 
-        // Persist all changed cards (shifted children + resized parent).
+        // Persist all changed cards (shifted children + resized parent(s)).
         try {
           const writes: Promise<void>[] = []
           for (const [id, c] of nextCards) {
@@ -1764,11 +1774,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
             }
           }
           await Promise.all(writes)
-          // If the parent itself has a parent, re-run auto-resize upward so
-          // ancestors reflect the parent's new (potentially smaller) size.
-          const updatedParent = nextCards.get(cardId)
-          if (updatedParent?.parentId !== null && updatedParent?.parentId !== undefined) {
-            setCards((prev) => autoResizeParent(prev, updatedParent.parentId!))
+          // If the topmost ancestor that was processed still has a parent above
+          // it (i.e. Shift was NOT held, or the root was not reached), run the
+          // lightweight autoResizeParent so ancestors above still adjust.
+          if (!shiftKey) {
+            const updatedCard = nextCards.get(cardId)
+            if (updatedCard?.parentId !== null && updatedCard?.parentId !== undefined) {
+              setCards((prev) => autoResizeParent(prev, updatedCard.parentId!))
+            }
           }
           setError(null)
         } catch (err) {
@@ -1793,34 +1806,42 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         resetH = 100
       }
 
-      // Optimistic update.
-      setCards((prev) => {
-        let updated = new Map(prev)
-        const c = updated.get(cardId)
-        if (!c) return prev
-        updated.set(cardId, { ...c, width: resetW, height: resetH })
-        // If the card has a parent, re-run auto-resize so the parent adjusts.
-        if (c.parentId !== null) {
-          updated = autoResizeParent(updated, c.parentId)
+      // Build the next state synchronously so we can diff it for persistence.
+      const stateBefore = new Map(cardsRef.current)
+      let nextCards = new Map(cardsRef.current)
+      nextCards.set(cardId, { ...card, width: resetW, height: resetH })
+      if (card.parentId !== null) {
+        if (shiftKey) {
+          // Cascade fitToContents up the full ancestor chain.
+          let ancestorId: number | null = card.parentId
+          while (ancestorId !== null) {
+            nextCards = fitToContents(nextCards, ancestorId)
+            ancestorId = nextCards.get(ancestorId)?.parentId ?? null
+          }
+        } else {
+          nextCards = autoResizeParent(nextCards, card.parentId)
         }
-        return updated
-      })
+      }
+      setCards(nextCards)
 
-      // Persist.
+      // Persist all changed cards (leaf + any resized ancestors).
       try {
-        await db.updateNodeLayout(cardId, mapId, card.x, card.y, resetW, resetH)
+        const writes: Promise<void>[] = []
+        for (const [id, c] of nextCards) {
+          const before = stateBefore.get(id)
+          if (!before) continue
+          const posChanged = c.x !== before.x || c.y !== before.y
+          const sizeChanged = c.width !== before.width || c.height !== before.height
+          if (posChanged || sizeChanged) {
+            writes.push(db.updateNodeLayout(id, mapId, c.x, c.y, c.width, c.height))
+          }
+        }
+        await Promise.all(writes)
         setError(null)
       } catch (err) {
         console.error('[Canvas] Failed to persist reset size:', err)
         setError('Failed to save size reset.')
-        // Revert to original size and floor
-        setCards((prev) => {
-          const updated = new Map(prev)
-          const c = updated.get(cardId)
-          if (!c) return prev
-          updated.set(cardId, { ...c, width: card.width, height: card.height })
-          return updated
-        })
+        setCards(stateBefore)
       }
     },
     [mapId]

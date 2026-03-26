@@ -43,7 +43,7 @@ interface CardProps {
   onDragStart: (cardId: number, e: React.MouseEvent) => void
   onSelect: (cardId: number) => void
   onContentChange: (cardId: number, newContent: string) => void
-  onResetSize: (cardId: number) => void
+  onResetSize: (cardId: number, shiftKey: boolean) => void
   onAutoFocusConsumed: () => void
   onWidthChange: (cardId: number, newWidth: number) => void
   zoom: number
@@ -255,7 +255,7 @@ export const Card: React.FC<CardProps> = React.memo(({
   const handleBodyDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      onResetSize(card.id)
+      onResetSize(card.id, e.shiftKey)
     },
     [card.id, onResetSize]
   )

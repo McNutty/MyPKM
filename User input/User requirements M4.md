@@ -1,9 +1,15 @@
 # New issues (these should be moved to handled when taken care of)
 
-- I want all card drops to use the new push-implementation. Right now it is only when cards are dropped *on a new parent* that triggers the push, not cards dropped on siblings in the same parent they already belong to. I think it would be most consistent to have all card drops feel the same. And I want them to use the *same* implementation, not just something similar. As an added bonus, we today have an autoexpand when a card is dropped near an parent edge, this would be replaced with push-mode, thus gaining the cascading push that is now missing from that situation.
-- We have a bug with cascading pushes when using Push-mode. The easiest way of replicating is this: Have two cards beside each other vertically ("A" and "B"). The top one ("A") has two children also arranged vertically ("C" is topmost and "D" below). If you then add a card to "C", it will expand and push D down. D will then *NOT* push the edge of A downwards into B, it will instead move outside the boundary of A and overlap B. This behavior is not present when you instead resize C downwards, then everything works as expected.
+(No new issues)
 # Handled issues (either solved in code or updated in documentation)
 
+- Shift+double-click cascading fit-to-contents: Shift+double-click on any card does the normal reset, then cascades fitToContents upward through all ancestors.
+  - **Fixed:** Pass shiftKey from Card.tsx through to handleResetSize. Walk ancestor chain calling fitToContents at each level. Leaf branch refactored to synchronous pre-computation for proper persist.
+
+- Unified drop-push: All card drops (same-parent and new-parent) now resolve overlaps via applyDropPush + applyPushMode. Same code path, same behavior everywhere.
+  - **Fixed:** Layout-only drag path now calls applyDropPush → applyPushMode for nested cards. Added dropPushChanged detection for state updates.
+- Cascade bug fix: Pushed siblings no longer escape their parent. Root cause: autoResizeParent sized all ancestors before pushCascade ran, freezing heights before siblings moved.
+  - **Fixed:** Extracted resizeOneParent from autoResizeParent. Rewrote applyPushMode Phase 2 to interleave resize + push at each ancestor level. Each resize now sees post-push sibling positions from the level below.
 - DB schema cleanup: Dropped min_width/min_height columns from layout table, removed from Rust struct/commands/SQL, cleaned frontend IPC.
   - **Fixed:** Idempotent DROP COLUMN migration in db.rs. Removed from NodeWithLayout struct, all SQL queries, all command signatures. Frontend IPC no longer passes null params.
 
@@ -76,4 +82,9 @@
 32. Resize cascade still works: resize C downward → D pushed → A grows → B pushed- OK!
 33. Title expand in nested card → cascade propagates upward correctly - OK!
 34. Root-level drop: cards without a parent — no push, just normal move - OK!
-35. Shift+drag still smooth with 24px gap (no regression) - OK!
+35. Shift+drag still smooth with 20px gap (no regression) - OK!
+36. Normal double-click (no Shift) still works as before — fits one card only - OK!
+37. Shift+double-click on leaf card → resets leaf to title width, then each ancestor shrinks to fit - OK!
+38. Shift+double-click on parent card → fitToContents on that parent, then each ancestor shrinks - OK!
+39. Shift+double-click on root card → fits that card only (no ancestors) - OK!
+40. Shift+double-click deeply nested (3+ levels) → all ancestor levels tighten up in one action - OK!
