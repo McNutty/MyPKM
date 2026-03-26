@@ -406,8 +406,8 @@ export const RelationshipCard: React.FC<RelationshipCardProps> = ({
 interface RelationshipOverlayProps {
   relationships: RelationshipData[]
   cards: Map<number, import('../store/types').CardData>
-  /** Absolute canvas-space position for each relationship card, keyed by rel.id */
-  relCardPositions: Map<number, { x: number; y: number }>
+  /** Offset from the computed edge-to-edge midpoint for each relationship label card, keyed by rel.id */
+  relCardPositions: Map<number, { dx: number; dy: number }>
   selectedRelId: number | null
   editingRelId: number | null
   onSelectRel: (relId: number) => void
@@ -478,10 +478,11 @@ export const RelationshipOverlay: React.FC<RelationshipOverlayProps> = ({
     const defaultMidX = (defaultStart.x + defaultEnd.x) / 2
     const defaultMidY = (defaultStart.y + defaultEnd.y) / 2
 
-    // Use stored position if available and non-zero; otherwise fall back to midpoint.
+    // Absolute label position = midpoint + stored offset.
+    // An offset of {dx:0, dy:0} (or no stored entry) places the label exactly at the midpoint.
     const stored = relCardPositions.get(rel.id)
-    const labelX = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.x : defaultMidX
-    const labelY = (stored && (stored.x !== 0 || stored.y !== 0)) ? stored.y : defaultMidY
+    const labelX = defaultMidX + (stored?.dx ?? 0)
+    const labelY = defaultMidY + (stored?.dy ?? 0)
 
     // Decompose raw label position into stable curve geometry + on-curve visual position
     const geom = decomposeRelationshipGeometry(sourcePos, targetPos, labelX, labelY)

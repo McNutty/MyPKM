@@ -1,13 +1,14 @@
 # New issues (these should be moved to handled when taken care of)
 
-- Manual resizing of cards should also enable Pushing Mode, so you can "make space" around a card by resizing it also. This all ties into the goal of "no overlaps". I think we will work a bit more on this actually, more changes incoming.
-- More work on arrows. I really want to try an easier transform. Right now it is too buggy, for example if the arrow becomes too twisted/curved and the label is close to an endpoint, it sometimes can be impossible to sort it out, dragging is barely moving the handle at all. The main point is that I want the moved label to stick to the pointer at all times, just as when you move a regular card. The current algorithm only works ok for labels near the middle. I'm willing to try a simpler curve with a "constant" radius that you can change by moving the label.
-- The default size for cards should be big enough to show the whole title.
-- Right now, pressing delete when editing a title deletes the card. Very annoying.
+(No new issues)
 # Handled issues (either solved in code or updated in documentation)
 
 - Multiple Models: Create, switch, rename, delete canvases. Left sidebar model picker. Rust backend with cascade delete. Fixed get_map_relationships to filter by map_id. Added map_id column to relationships with migration + backfill.
   - **Fixed:** 4 new Rust commands (create_map, get_all_maps, rename_map, delete_map). LeftSidebar component with inline rename, hover delete, create with auto-rename. Canvas keyed on mapId for clean reload on switch.
+- Delete key guard while editing title. Resize always-on pushing mode. Arrow label inverse Bezier rework (label sticks to pointer). Auto-expanding card titles during edit. Reset-to-fit on double-click. Default card height 100.
+  - **Fixed:** isTextFocused guard on Delete handler. applyPushMode called in resize branch. decomposeRelationshipGeometry rewritten with inverse Bezier (Q solved from label position). Hidden span measurer in Card.tsx for title width. Canvas 2D measureText for reset-to-fit. headerPadding=48 consistent across both.
+- Relationship labels follow endpoint cards automatically during push mode, fit-to-contents, drag, and all card-moving operations.
+  - **Fixed:** Architectural refactor — label positions changed from absolute canvas coordinates to midpoint-relative offsets {dx, dy}. Labels now derive their absolute position at render time (midpoint + offset), eliminating the entire class of label-drift bugs. ~90 lines of manual label-shifting code deleted. Net -53 lines.
 
 # Requirements testing
 
@@ -31,3 +32,11 @@
 13. Resizing a card pushes overlapping siblings out of the way (no Shift needed) - OK!
 14. Arrow label sticks to the pointer at all times when dragging, even near endpoints - OK!
 	1. Not only ok, but I think we might finally have cracked the arrow behavior. It seems perfect to me now, better than the original Plectica and better than any whiteboarding app I have ever tried!
+15. Relationship labels move along with their endpoint cards when pushed by push mode
+	1. Yes, but something is not right with the calculation, now the label moves *too much*. So if the parent card is being pushed downwards, the label also moves downwards, but a bit too much. The same for each of the other directions. This seems like a code smell to me, shouldn't this calculation behave exactly the same way as the other ones?
+	2. Still the same problem. The other tests are still ok, but the labels still move too much. This fix also broke simple dragging. On mouse-down, the cursor turns into a "forbidden sign" and the card starts to move when I *release* the mouse button. We must revert this fix and find another solution. I didn't like the ref solution from the beginning.
+	3. Ok, dragging works again, but the labels still drift.
+	4. Hm, something is off. It seems like the *pushed* cards now work as expected, the labels stay in place and snap back on mouse-up. But the card being dragged (the *pusher*) now has started to have its labels shift. This shouldn't be possible, no change we have done should have affected the behavior of dragged cards.
+	5. Still problems with the pushing card. The mor
+16. Relationship labels move along with their endpoint cards when fit-to-contents shifts children (double-click parent reset) - OK!
+	1. Works great, label stays perfectly in place.

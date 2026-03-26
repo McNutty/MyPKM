@@ -51,6 +51,44 @@ const NESTING_ENABLED = true
 const DRAG_THRESHOLD = 4
 
 // ============================================================================
+// HELPERS (module-level, no React deps)
+// ============================================================================
+
+/**
+ * Computes the edge-to-edge midpoint for a relationship, in absolute canvas
+ * coordinates. Returns null if either card is missing from the map.
+ *
+ * This is the anchor point for the offset-based label storage: the label's
+ * absolute canvas position is always `midpoint + {dx, dy}`.
+ */
+function computeRelMidpoint(
+  cards: Map<number, CardData>,
+  rel: RelationshipData,
+): { x: number; y: number } | null {
+  const srcCard = cards.get(rel.sourceId)
+  const tgtCard = cards.get(rel.targetId)
+  if (!srcCard || !tgtCard) return null
+
+  const srcAbs = getAbsolutePosition(cards, rel.sourceId)
+  const tgtAbs = getAbsolutePosition(cards, rel.targetId)
+
+  const srcCenter = { x: srcAbs.x + srcCard.width / 2, y: srcAbs.y + srcCard.height / 2 }
+  const tgtCenter = { x: tgtAbs.x + tgtCard.width / 2, y: tgtAbs.y + tgtCard.height / 2 }
+
+  const edgeStart = computeEdgePoint(srcCenter, tgtCenter, {
+    x: srcAbs.x, y: srcAbs.y, w: srcCard.width, h: srcCard.height,
+  })
+  const edgeEnd = computeEdgePoint(tgtCenter, srcCenter, {
+    x: tgtAbs.x, y: tgtAbs.y, w: tgtCard.width, h: tgtCard.height,
+  })
+
+  return {
+    x: (edgeStart.x + edgeEnd.x) / 2,
+    y: (edgeStart.y + edgeEnd.y) / 2,
+  }
+}
+
+// ============================================================================
 // PROPS
 // ============================================================================
 
@@ -104,10 +142,11 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   const [reattachMousePos, setReattachMousePos] = useState<{ x: number; y: number } | null>(null)
 
   // M3: Relationship card drag state
-  // relCardPositions: absolute canvas-space position of each relationship card,
-  // keyed by relationship ID. Populated from relationship node layout rows on
-  // load; updated on drag; persisted to DB on mouseup.
-  const [relCardPositions, setRelCardPositions] = useState<Map<number, { x: number; y: number }>>(new Map())
+  // relCardPositions: offset from the computed edge-to-edge midpoint for each
+  // relationship label card, keyed by relationship ID. {dx:0, dy:0} means the
+  // label sits exactly at the midpoint (the default). Labels automatically
+  // follow their endpoints -- no manual shifting needed when cards move.
+  const [relCardPositions, setRelCardPositions] = useState<Map<number, { dx: number; dy: number }>>(new Map())
   const [draggingRelCardId, setDraggingRelCardId] = useState<number | null>(null)
   // Offset from the card's center to the mouse position at drag-start, in canvas space
   const [relCardDragOffset, setRelCardDragOffset] = useState<{ x: number; y: number } | null>(null)
@@ -224,16 +263,25 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
         setRelationships(rels)
 
-        // Build relCardPositions: map each rel.id -> its node's canvas position.
-        // A position of (0, 0) means the relationship was just created and the
-        // card hasn't been moved -- RelationshipOverlay will use the computed
-        // midpoint as the fallback.
-        const positions = new Map<number, { x: number; y: number }>()
+        // Build relCardPositions: map each rel.id -> offset from computed midpoint.
+        // The DB stores absolute canvas positions; we convert to {dx, dy} here so
+        // labels automatically follow their endpoints when cards move.
+        // An offset of {dx:0, dy:0} means the label is at the midpoint (the default).
+        const positions = new Map<number, { dx: number; dy: number }>()
         for (const rel of rels) {
           if (rel.relNodeId !== null) {
             const nodePos = relNodePositions.get(rel.relNodeId)
-            if (nodePos) {
-              positions.set(rel.id, { x: nodePos.x, y: nodePos.y })
+            if (nodePos && (nodePos.x !== 0 || nodePos.y !== 0)) {
+              // Convert absolute DB position to offset from the computed midpoint.
+              const mid = computeRelMidpoint(map, rel)
+              if (mid) {
+                positions.set(rel.id, { dx: nodePos.x - mid.x, dy: nodePos.y - mid.y })
+              } else {
+                positions.set(rel.id, { dx: 0, dy: 0 })
+              }
+            } else {
+              // Position (0,0) means never-dragged: store as zero offset (at midpoint).
+              positions.set(rel.id, { dx: 0, dy: 0 })
             }
           }
         }
@@ -458,40 +506,17 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
       const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
 
-      // Resolve the card's actual visual position. A stored position of (0, 0)
-      // means the card has never been dragged -- RelationshipOverlay uses the
-      // computed edge-to-edge midpoint as the fallback, so we must match that
-      // logic here. Using (0, 0) as the card position would make the drag offset
-      // equal to the full canvas coordinate of the cursor, causing the card to
-      // fly to the upper-left on the first drag frame.
+      // Resolve the card's actual visual position as midpoint + stored offset.
+      // {dx:0, dy:0} (the default) means the label is at the midpoint itself.
       const stored = relCardPositionsRef.current.get(relId)
-      let visualX: number
-      let visualY: number
-      if (stored && (stored.x !== 0 || stored.y !== 0)) {
-        visualX = stored.x
-        visualY = stored.y
-      } else {
-        // Recompute the same midpoint that RelationshipOverlay shows as the default.
-        const rel = relationshipsRef.current.find((r) => r.id === relId)
-        if (rel) {
-          const srcCard = cardsRef.current.get(rel.sourceId)
-          const tgtCard = cardsRef.current.get(rel.targetId)
-          if (srcCard && tgtCard) {
-            const srcAbs = getAbsolutePosition(cardsRef.current, rel.sourceId)
-            const tgtAbs = getAbsolutePosition(cardsRef.current, rel.targetId)
-            const srcCenter = { x: srcAbs.x + srcCard.width / 2, y: srcAbs.y + srcCard.height / 2 }
-            const tgtCenter = { x: tgtAbs.x + tgtCard.width / 2, y: tgtAbs.y + tgtCard.height / 2 }
-            const edgeStart = computeEdgePoint(srcCenter, tgtCenter, { x: srcAbs.x, y: srcAbs.y, w: srcCard.width, h: srcCard.height })
-            const edgeEnd = computeEdgePoint(tgtCenter, srcCenter, { x: tgtAbs.x, y: tgtAbs.y, w: tgtCard.width, h: tgtCard.height })
-            visualX = (edgeStart.x + edgeEnd.x) / 2
-            visualY = (edgeStart.y + edgeEnd.y) / 2
-          } else {
-            visualX = canvasX
-            visualY = canvasY
-          }
-        } else {
-          visualX = canvasX
-          visualY = canvasY
+      let visualX: number = canvasX
+      let visualY: number = canvasY
+      const rel = relationshipsRef.current.find((r) => r.id === relId)
+      if (rel) {
+        const mid = computeRelMidpoint(cardsRef.current, rel)
+        if (mid) {
+          visualX = mid.x + (stored?.dx ?? 0)
+          visualY = mid.y + (stored?.dy ?? 0)
         }
       }
 
@@ -694,16 +719,21 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       if (draggingRelCardId !== null && relCardDragOffset) {
         const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
         const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
-        // Store pointer position directly. decomposeRelationshipGeometry now
-        // computes the control point so the curve passes through the label,
-        // meaning visualX/Y == labelX/Y -- no error correction required.
+        // The new absolute label position (mouse minus drag offset).
         const newX = canvasX - relCardDragOffset.x
         const newY = canvasY - relCardDragOffset.y
-        setRelCardPositions((prev) => {
-          const next = new Map(prev)
-          next.set(draggingRelCardId, { x: newX, y: newY })
-          return next
-        })
+        // Compute the current midpoint and store the offset from it.
+        const rel = relationshipsRef.current.find((r) => r.id === draggingRelCardId)
+        if (rel) {
+          const mid = computeRelMidpoint(cardsRef.current, rel)
+          if (mid) {
+            setRelCardPositions((prev) => {
+              const next = new Map(prev)
+              next.set(draggingRelCardId, { dx: newX - mid.x, dy: newY - mid.y })
+              return next
+            })
+          }
+        }
         return
       }
 
@@ -871,100 +901,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         )
       }
 
-      // Move connected relationship label cards proportionally.
-      // When a card moves by (dx, dy), each label card on a connected relationship
-      // shifts by a weighted fraction of that delta. Weight is how close the label
-      // is to the moving card (1.0 = at the moving card, 0.0 = at the other endpoint).
-      // Labels at (0,0) (never dragged -- auto-recomputed as midpoint each frame) are skipped.
-      const prevAbsX = dragState.absX
-      const prevAbsY = dragState.absY
-      const dxLabel = newAbsX - prevAbsX
-      const dyLabel = newAbsY - prevAbsY
-
-      if (dxLabel !== 0 || dyLabel !== 0) {
-        // Collect the full set of card IDs that are physically moving this frame:
-        // the dragged card itself plus all its descendants (they translate by the
-        // same absolute delta because their positions are expressed in their
-        // parent's local coordinate space, which moves with the dragged card).
-        const movingCardIds = new Set<number>([dragState.cardId])
-        for (const [id] of cardsRef.current) {
-          if (isAncestor(cardsRef.current, id, dragState.cardId)) {
-            movingCardIds.add(id)
-          }
-        }
-
-        // Union of all relationships touching any moving card, deduped by rel.id.
-        const seenRelIds = new Set<number>()
-        const allMovingRels: RelationshipData[] = []
-        for (const movingId of movingCardIds) {
-          const rels = relsByCardRef.current.get(movingId)
-          if (!rels) continue
-          for (const rel of rels) {
-            if (!seenRelIds.has(rel.id)) {
-              seenRelIds.add(rel.id)
-              allMovingRels.push(rel)
-            }
-          }
-        }
-
-        if (allMovingRels.length) {
-          setRelCardPositions((prev) => {
-            const next = new Map(prev)
-            for (const rel of allMovingRels) {
-              const stored = next.get(rel.id)
-              if (!stored || (stored.x === 0 && stored.y === 0)) continue // default midpoint recomputes naturally
-
-              const sourceMoving = movingCardIds.has(rel.sourceId)
-              const targetMoving = movingCardIds.has(rel.targetId)
-
-              // Both endpoints are moving (e.g. relationship between two children of
-              // the dragged card) -- the label translates by the full delta.
-              if (sourceMoving && targetMoving) {
-                next.set(rel.id, { x: stored.x + dxLabel, y: stored.y + dyLabel })
-                continue
-              }
-
-              // One endpoint is moving. Determine which card is the "moving" one
-              // and which is the stationary "other" so we can compute a weight.
-              const movingCardId = sourceMoving ? rel.sourceId : rel.targetId
-              const otherCardId  = sourceMoving ? rel.targetId  : rel.sourceId
-
-              const movingCard = cardsRef.current.get(movingCardId)
-              const otherCard  = cardsRef.current.get(otherCardId)
-
-              if (!otherCard) {
-                next.set(rel.id, { x: stored.x + dxLabel * 0.5, y: stored.y + dyLabel * 0.5 })
-                continue
-              }
-
-              // Moving card's center: use its current absolute position (before
-              // the in-frame update) as the reference point for weight calculation.
-              const movingAbs = movingCardId === dragState.cardId
-                ? { x: prevAbsX, y: prevAbsY }
-                : getAbsolutePosition(cardsRef.current, movingCardId)
-              const movingCx = movingAbs.x + (movingCard?.width ?? 0) / 2
-              const movingCy = movingAbs.y + (movingCard?.height ?? 0) / 2
-
-              const otherAbs = getAbsolutePosition(cardsRef.current, otherCardId)
-              const otherCx = otherAbs.x + otherCard.width / 2
-              const otherCy = otherAbs.y + otherCard.height / 2
-
-              // Distance-based weight: how far the label is from each endpoint.
-              // weight=1.0 -> label is at the moving card (moves fully with it).
-              // weight=0.0 -> label is at the other card (stays put).
-              // Stable for curved arrows, close cards, and crossing cards because
-              // distances are always positive -- no axis direction or sign flips.
-              const distToMoving = Math.hypot(stored.x - movingCx, stored.y - movingCy)
-              const distToOther  = Math.hypot(stored.x - otherCx,  stored.y - otherCy)
-              const totalDist = distToMoving + distToOther
-              const weight = totalDist > 1 ? distToOther / totalDist : 0.5
-              next.set(rel.id, { x: stored.x + dxLabel * weight, y: stored.y + dyLabel * weight })
-            }
-            return next
-          })
-        }
-      }
-
       // Track whether Shift is held this frame. The ref updates mid-drag so
       // pushing mode can be toggled on/off without interrupting the drag.
       shiftHeldDuringDragRef.current = e.shiftKey
@@ -1036,15 +972,24 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   }, [])
 
   // Persists rel card positions for all relationships in the given list.
-  // Skips rels with no relNodeId and positions still at the default (0,0).
+  // Converts stored {dx, dy} offsets to absolute canvas positions for DB storage.
+  // Skips rels with no relNodeId and those whose midpoint cannot be computed
+  // (missing endpoints -- should not occur in practice after a card drag).
   const persistRelCardPositions = useCallback(async (rels: typeof relationshipsRef.current) => {
     const writes: Promise<void>[] = []
     for (const rel of rels) {
       if (rel.relNodeId === null) continue
-      const pos = relCardPositionsRef.current.get(rel.id)
-      if (!pos || (pos.x === 0 && pos.y === 0)) continue
+      const stored = relCardPositionsRef.current.get(rel.id)
+      if (!stored) continue
+      // Skip if offset is exactly zero AND no non-zero entry was ever set
+      // (i.e. the label has never been dragged away from the midpoint).
+      // We still write it if it's zero but was explicitly set (dx/dy exist in the map).
+      const mid = computeRelMidpoint(cardsRef.current, rel)
+      if (!mid) continue
+      const absX = mid.x + stored.dx
+      const absY = mid.y + stored.dy
       writes.push(
-        db.updateNodeLayout(rel.relNodeId, mapId, pos.x, pos.y, 80, 28, null, null).catch((err) => {
+        db.updateNodeLayout(rel.relNodeId, mapId, absX, absY, 80, 28, null, null).catch((err) => {
           console.error('[Canvas] Failed to persist rel card position after card drag:', err)
         })
       )
@@ -1068,20 +1013,22 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       setDraggingRelCardId(null)
       setRelCardDragOffset(null)
 
-      // Find the relationship to get its relNodeId for DB persistence
+      // Find the relationship to get its relNodeId for DB persistence.
+      // The DB stores absolute canvas positions, so convert offset -> absolute here.
       const rel = relationshipsRef.current.find((r) => r.id === relId)
       if (rel && rel.relNodeId !== null) {
-        const pos = relCardPositionsRef.current.get(relId)
-        if (pos) {
-          // Persist the relationship card position using the rel node's layout row.
-          // We store x,y as the absolute canvas position. Width/height stay at
-          // 80x28 -- the same values the Rust backend sets on create_relationship.
-          // The layout table requires width > 0 and height > 0.
-          try {
-            await db.updateNodeLayout(rel.relNodeId, mapId, pos.x, pos.y, 80, 28, null, null)
-          } catch (err) {
-            console.error('[Canvas] Failed to persist relationship card position:', err)
-            setError('Failed to save relationship card position.')
+        const stored = relCardPositionsRef.current.get(relId)
+        if (stored) {
+          const mid = computeRelMidpoint(cardsRef.current, rel)
+          if (mid) {
+            const absX = mid.x + stored.dx
+            const absY = mid.y + stored.dy
+            try {
+              await db.updateNodeLayout(rel.relNodeId, mapId, absX, absY, 80, 28, null, null)
+            } catch (err) {
+              console.error('[Canvas] Failed to persist relationship card position:', err)
+              setError('Failed to save relationship card position.')
+            }
           }
         }
       }
@@ -1122,11 +1069,10 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       try {
         const rel = await db.createRelationship(sourceId, targetId, '', mapId)
         setRelationships((prev) => [...prev, rel])
-        // Register the new rel with position (0,0) -- RelationshipOverlay falls
-        // back to the computed midpoint when x===0 && y===0.
+        // Register the new rel with zero offset -- label starts at the midpoint.
         setRelCardPositions((prev) => {
           const next = new Map(prev)
-          next.set(rel.id, { x: 0, y: 0 })
+          next.set(rel.id, { dx: 0, dy: 0 })
           return next
         })
         setSelectedRelId(rel.id)
