@@ -48,10 +48,7 @@ export class TauriDb implements DbInterface {
     width: number,
     height: number,
   ): Promise<void> {
-    // Always pass null for min_width/min_height -- the auto-shrink mechanism has been
-    // removed from the frontend. The Rust command still accepts these params so we
-    // pass null rather than change the backend.
-    return invoke('update_node_layout', { nodeId, mapId, x, y, width, height, minWidth: null, minHeight: null })
+    return invoke('update_node_layout', { nodeId, mapId, x, y, width, height })
   }
 
   async updateNodeParent(
@@ -63,10 +60,7 @@ export class TauriDb implements DbInterface {
     width: number,
     height: number,
   ): Promise<void> {
-    // Tauri v2 auto-converts snake_case Rust param names to camelCase on the JS side.
-    // The Rust command signature uses node_id, new_parent_id, map_id, x, y, width, height, min_width, min_height.
-    // Always pass null for min_width/min_height -- auto-shrink removed from frontend.
-    return invoke('update_node_parent', { nodeId, newParentId, mapId, x, y, width, height, minWidth: null, minHeight: null })
+    return invoke('update_node_parent', { nodeId, newParentId, mapId, x, y, width, height })
   }
 
   async deleteNode(nodeId: number): Promise<void> {

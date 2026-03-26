@@ -37,8 +37,6 @@ CREATE TABLE IF NOT EXISTS layout (
     y           REAL    NOT NULL,
     width       REAL    NOT NULL CHECK(width > 0),
     height      REAL    NOT NULL CHECK(height > 0),
-    min_width   REAL    DEFAULT NULL,
-    min_height  REAL    DEFAULT NULL,
     UNIQUE(node_id, map_id)
 );
 
@@ -95,19 +93,24 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
     conn.execute_batch(SCHEMA_DDL)?;
 
     // --- 4a. Additive migrations for existing databases ---
-    // ALTER TABLE ADD COLUMN is idempotent here: we match on the "duplicate
-    // column name" error text and silently ignore it so this block is safe to
-    // run on every startup regardless of DB age.
+    // Idempotent schema migrations. Each statement is attempted on every
+    // startup and silently ignored if the structural change has already
+    // been applied:
+    //   - ADD COLUMN:  ignore "duplicate column name"
+    //   - DROP COLUMN: ignore "no such column" (column already absent,
+    //                  e.g. on a fresh database built from the current DDL)
     for sql in &[
-        "ALTER TABLE layout ADD COLUMN min_width  REAL DEFAULT NULL",
-        "ALTER TABLE layout ADD COLUMN min_height REAL DEFAULT NULL",
         // Phase 2: relationship-as-node. Add rel_node_id to relationships.
         "ALTER TABLE relationships ADD COLUMN rel_node_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE",
         // M4: scope relationships to a map so get_map_relationships can filter correctly.
         "ALTER TABLE relationships ADD COLUMN map_id INTEGER REFERENCES maps(id) ON DELETE CASCADE",
+        // Post-M4: remove dead auto-shrink columns from layout.
+        "ALTER TABLE layout DROP COLUMN min_width",
+        "ALTER TABLE layout DROP COLUMN min_height",
     ] {
         if let Err(e) = conn.execute_batch(sql) {
-            if !e.to_string().contains("duplicate column name") {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") && !msg.contains("no such column") {
                 return Err(e);
             }
         }

@@ -29,8 +29,6 @@ pub struct NodeWithLayout {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    pub min_width: Option<f64>,
-    pub min_height: Option<f64>,
 }
 
 // ============================================================
@@ -58,8 +56,7 @@ pub fn get_map_nodes(
     let mut stmt = conn
         .prepare(
             "SELECT n.id, n.parent_id, n.content, n.node_type, n.metadata, \
-                    l.id AS layout_id, l.x, l.y, l.width, l.height, \
-                    l.min_width, l.min_height \
+                    l.id AS layout_id, l.x, l.y, l.width, l.height \
              FROM nodes n \
              INNER JOIN layout l ON l.node_id = n.id \
              WHERE l.map_id = ?1",
@@ -79,8 +76,6 @@ pub fn get_map_nodes(
                 y: row.get(7)?,
                 width: row.get(8)?,
                 height: row.get(9)?,
-                min_width: row.get(10)?,
-                min_height: row.get(11)?,
             })
         })
         .map_err(|e| sql_err("query get_map_nodes", e))?;
@@ -124,8 +119,8 @@ pub fn create_node(
 
         // Insert the layout row.
         conn.execute(
-            "INSERT INTO layout (node_id, map_id, x, y, width, height, min_width, min_height) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL)",
+            "INSERT INTO layout (node_id, map_id, x, y, width, height) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![node_id, map_id, x, y, width, height],
         )?;
 
@@ -184,17 +179,14 @@ pub fn update_node_layout(
     y: f64,
     width: f64,
     height: f64,
-    min_width: Option<f64>,
-    min_height: Option<f64>,
 ) -> Result<(), String> {
     let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     let rows_affected = conn
         .execute(
-            "UPDATE layout SET x = ?1, y = ?2, width = ?3, height = ?4, \
-             min_width = ?5, min_height = ?6 \
-             WHERE node_id = ?7 AND map_id = ?8",
-            rusqlite::params![x, y, width, height, min_width, min_height, node_id, map_id],
+            "UPDATE layout SET x = ?1, y = ?2, width = ?3, height = ?4 \
+             WHERE node_id = ?5 AND map_id = ?6",
+            rusqlite::params![x, y, width, height, node_id, map_id],
         )
         .map_err(|e| sql_err("update_node_layout", e))?;
 
@@ -490,8 +482,8 @@ pub fn create_relationship(
         // 2. Place the companion node on the map at a placeholder position.
         //    The frontend will move it to its midpoint position after first render.
         conn.execute(
-            "INSERT INTO layout (node_id, map_id, x, y, width, height, min_width, min_height) \
-             VALUES (?1, ?2, 0.0, 0.0, 80.0, 28.0, NULL, NULL)",
+            "INSERT INTO layout (node_id, map_id, x, y, width, height) \
+             VALUES (?1, ?2, 0.0, 0.0, 80.0, 28.0)",
             rusqlite::params![rel_node_id, map_id],
         )?;
 
@@ -1065,8 +1057,6 @@ pub fn update_node_parent(
     y: f64,
     width: f64,
     height: f64,
-    min_width: Option<f64>,
-    min_height: Option<f64>,
 ) -> Result<(), String> {
     // ----------------------------------------------------------------
     // 1. Self-reference check (no DB call needed).
@@ -1131,10 +1121,9 @@ pub fn update_node_parent(
 
         // 4. Update spatial layout (coordinates are local to new parent).
         let layout_rows_affected = conn.execute(
-            "UPDATE layout SET x = ?1, y = ?2, width = ?3, height = ?4, \
-             min_width = ?5, min_height = ?6 \
-             WHERE node_id = ?7 AND map_id = ?8",
-            rusqlite::params![x, y, width, height, min_width, min_height, node_id, map_id],
+            "UPDATE layout SET x = ?1, y = ?2, width = ?3, height = ?4 \
+             WHERE node_id = ?5 AND map_id = ?6",
+            rusqlite::params![x, y, width, height, node_id, map_id],
         )?;
 
         if layout_rows_affected == 0 {
