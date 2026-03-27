@@ -1,3 +1,17 @@
+# Milestone Scope
+
+M3 adds Relationships (R) to the canvas and closes carry-forward items from M2.
+
+**Core deliverables:**
+1. **Relationship drawing** — Hover reveals handles, drag to connect cards with directed arrows
+2. **Cross-boundary relationships** — Cards in different subtrees can be connected
+3. **Relationship editing** — Click to select, double-click to edit label, Delete to remove, F to flip
+4. **Persistence** — All relationships survive reload with correct data and visual state
+5. **Delete cascade** — Deleting a card removes its relationships; cards with parts get a confirmation dialog
+6. **Code language cleanup** — No "containers" in code, no `[db]` prefix in error messages
+
+*Full spec: `docs/m3-kickoff.md`*
+
 # New tasks
 
 - Still thinking about this, ignore for now!

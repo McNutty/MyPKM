@@ -1,3 +1,19 @@
+# Milestone Scope
+
+M4 gets the app to a state where the user can start using it for real modeling — real DSRP thinking on real problems.
+
+**Core deliverables:**
+1. **Multiple Models** — Create, name, switch between, and delete independent canvases
+2. **Note Panel** — Side panel showing card content, relationships, and markdown notes
+3. **Multi-Select** — Lasso and Shift+click selection, group move and delete
+4. **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z for all operations
+
+**Architectural pre-work (completed):**
+- Extract `mapId` from hardcoded `1` to state
+- Extract canvas rendering into `<Canvas />` component
+
+*Full spec: `docs/m4-kickoff.md`*
+
 # New tasks
 
 **T4-19: Reference architecture document**
@@ -5,9 +21,6 @@ We need some sort of reference architecture that all team members should interna
 
 **T4-20: Double-click leaf size bug**
 Small bug with double-click on leaf card to set default size. If the card is smaller than default so it expands, it doesn't trigger push-mode, which might lead it to overlap neighboring cards.
-
-**T4-21: Add "Milestone Scope" section to task files**
-Add a section at the top of the task-files called "Milestone Scope", where the scope from the kickoff is restated. This will make it easier for me to add tasks that fit the scope, right now I must admit I just add them as I think of them, the scope is not top of mind for me.
 
 **T4-22: Rework padding to be proportional to nesting level**
 Rework padding. I feel that padding should somehow be proportional to the "level". My reasoning is that when working with deeply nested structures, you often tend to zoom out. And the further zoomed out you are, the smaller the current padding seems. So if we could find some nice algorithm for this, I think it would make working at different zoom levels look better. I want to discuss this a bit before though, it is not fully thought through.
@@ -178,3 +191,7 @@ Pressing "r" or "l" activates connecting mode (crosshair cursor everywhere). Mou
 **T4-18: Restructure task tracking files**
 Rename "requirements" files to "tasks", reorganize format with IDs, indent test cases under each task, split compound tasks into separate entries.
 - **Fixed:** git mv to rename files, restructured M3 and M4 into new format with T3-XX and T4-XX IDs.
+
+**T4-21: Add "Milestone Scope" section to task files**
+Add a section at the top of the task-files called "Milestone Scope", where the scope from the kickoff is restated.
+- **Fixed:** Added Milestone Scope section to both Tasks M3.md and Tasks M4.md, summarizing core deliverables from their respective kickoff docs.

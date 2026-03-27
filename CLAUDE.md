@@ -49,7 +49,7 @@ See `team/roster.md` for the full roster.
 
 ## Task Tracking
 
-Task files live at `User input/Tasks M<N>.md`. Each task has an ID (e.g., `T4-01`) with test cases indented below it. The user adds new tasks as plain paragraphs — **Larry is responsible for assigning the next available ID and formatting them** (bold ID + title, description below).
+Task files live at `User input/Tasks M<N>.md`. Each file starts with a **Milestone Scope** section (summarizing the kickoff), followed by **New tasks** and **Resolved tasks**. Each task has an ID (e.g., `T4-01`) with test cases indented below it. The user adds new tasks as plain paragraphs — **Larry is responsible for assigning the next available ID and formatting them** (bold ID + title, description below).
 
 ## After Every Confirmed Fix
 
