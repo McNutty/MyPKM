@@ -1,7 +1,10 @@
 # New issues (these should be moved to handled when taken care of)
 
-(No new issues)
+- Revised "New relationship" handling. When the user presses "r" or "l" (for 'relationship' or 'line' respectively), the cursor should turn into the crosshair now used when clicking on an anchor point. Mouse-down should now create a source on the card under the cursor, and Mouse-up should create a destination on the card under the cursor. This is exactly what happens when you click an anchor-point today. So in other words, pressing "r" or "l", and then pressing the mouse button down, should behave identically to pressing the mouse button down on an anchor point. The same logic should be reused.
 # Handled issues (either solved in code or updated in documentation)
+
+- Revised "New card" handling: pressing "c" creates a card attached to the mouse pointer that follows the cursor (like a drag). Click to drop, reusing the exact same drag/drop/push/nest logic. Escape cancels. Title enters edit mode after drop.
+  - **Fixed:** Extracted `performDrop` from mouseup into a shared callback. "c" key handler creates card in DB, sets `dragState` with `offsetX/offsetY: 0`, and sets `placementCardIdRef`. `onMouseDownCapture` intercepts the click to trigger `performDrop` + `setNewCardId`. Escape deletes the card from state and DB.
 
 - Shift+double-click cascading fit-to-contents: Shift+double-click on any card does the normal reset, then cascades fitToContents upward through all ancestors.
   - **Fixed:** Pass shiftKey from Card.tsx through to handleResetSize. Walk ancestor chain calling fitToContents at each level. Leaf branch refactored to synchronous pre-computation for proper persist.
@@ -88,3 +91,10 @@
 38. Shift+double-click on parent card → fitToContents on that parent, then each ancestor shrinks - OK!
 39. Shift+double-click on root card → fits that card only (no ancestors) - OK!
 40. Shift+double-click deeply nested (3+ levels) → all ancestor levels tighten up in one action - OK!
+41. Press "c" → card appears at cursor (top-left), follows mouse movement - OK!
+42. During placement, hover over a card → nest target highlights - OK!
+43. Click to drop → card drops with push/nest logic, title enters edit mode - OK!
+44. Press "c" then Escape → card disappears, no leftover DB record - OK!
+45. Press "c", hover over parent with children, click → drop-push resolves overlaps - OK!
+46. Double-click on canvas → still creates card instantly (no placement drag) - OK!
+47. Normal drag/drop → no regression from placement mode changes - OK!

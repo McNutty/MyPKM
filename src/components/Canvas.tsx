@@ -206,9 +206,18 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   // persist all cards that moved (including pushed siblings in pushing mode).
   const dragStartCardsRef = useRef<Map<number, CardData> | null>(null)
 
+  // Placement mode: set when the user pressed "C" to create a card that follows
+  // the cursor. The card is in a live drag; the next mousedown commits the drop.
+  // Escape cancels and deletes the card.
+  const placementCardIdRef = useRef<number | null>(null)
+
   // Last known mouse position in screen space (clientX/clientY), for keyboard shortcuts
   // that need to know where the cursor is (e.g. "C" to create card at cursor).
   const lastMouseRef = useRef({ clientX: 0, clientY: 0 })
+
+  // Stable ref to performDrop so handleCanvasMouseDown (defined earlier in the file)
+  // can call it without a forward-reference issue. Updated after performDrop is declared.
+  const performDropRef = useRef<((ds: DragState, snapshot: Map<number, CardData> | null) => Promise<void>) | null>(null)
 
   // Keep a stable ref to cards for use inside event handlers that close over stale state
   const cardsRef = useRef(cards)
@@ -985,7 +994,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       const absX = mid.x + stored.dx
       const absY = mid.y + stored.dy
       writes.push(
-        db.updateNodeLayout(rel.relNodeId, mapId, absX, absY, 80, 28, null, null).catch((err) => {
+        db.updateNodeLayout(rel.relNodeId, mapId, absX, absY, 80, 28).catch((err) => {
           console.error('[Canvas] Failed to persist rel card position after card drag:', err)
         })
       )
@@ -994,222 +1003,20 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   }, [mapId])
 
   // ---------------------------------------------------------------------------
-  // MOUSE UP (end drag, resize, or pan -- persist to DB)
+  // PERFORM DROP -- shared by handleMouseUp and placement-mode mousedown
   // ---------------------------------------------------------------------------
-  const handleMouseUp = useCallback(async () => {
-    // If mouseup fires while pendingDrag was never promoted, it was just a
-    // click (or very short tap). Clear the pending state -- the card stays
-    // in the DOM, selection already happened in Card's handleMouseDown, and
-    // the resize handle is now visible for a selected card.
-    pendingDragRef.current = null
-
-    // --- RELATIONSHIP CARD DRAG END -- persist position ---
-    if (draggingRelCardId !== null) {
-      const relId = draggingRelCardId
-      setDraggingRelCardId(null)
-      setRelCardDragOffset(null)
-
-      // Find the relationship to get its relNodeId for DB persistence.
-      // The DB stores absolute canvas positions, so convert offset -> absolute here.
-      const rel = relationshipsRef.current.find((r) => r.id === relId)
-      if (rel && rel.relNodeId !== null) {
-        const stored = relCardPositionsRef.current.get(relId)
-        if (stored) {
-          const mid = computeRelMidpoint(cardsRef.current, rel)
-          if (mid) {
-            const absX = mid.x + stored.dx
-            const absY = mid.y + stored.dy
-            try {
-              await db.updateNodeLayout(rel.relNodeId, mapId, absX, absY, 80, 28, null, null)
-            } catch (err) {
-              console.error('[Canvas] Failed to persist relationship card position:', err)
-              setError('Failed to save relationship card position.')
-            }
-          }
-        }
-      }
-      return
-    }
-
-    // --- CONNECTION DRAW COMPLETE ---
-    if (connectingState) {
-      const { sourceId } = connectingState
-      const mousePos = connectingMousePos
-      setConnectingState(null)
-      setConnectingMousePos(null)
-
-      if (!mousePos) return
-
-      // Find the topmost card under the current mouse position (canvas coords),
-      // excluding the source card itself.
-      let targetId: number | null = null
-      let bestArea = Infinity
-      for (const [id, candidate] of cardsRef.current) {
-        if (id === sourceId) continue
-        const absPos = getAbsolutePosition(cardsRef.current, id)
-        const area = candidate.width * candidate.height
-        if (
-          mousePos.x >= absPos.x &&
-          mousePos.x <= absPos.x + candidate.width &&
-          mousePos.y >= absPos.y &&
-          mousePos.y <= absPos.y + candidate.height &&
-          area < bestArea
-        ) {
-          targetId = id
-          bestArea = area
-        }
-      }
-
-      if (targetId === null) return // Released on empty canvas -- cancel
-
-      try {
-        const rel = await db.createRelationship(sourceId, targetId, '', mapId)
-        setRelationships((prev) => [...prev, rel])
-        // Register the new rel with zero offset -- label starts at the midpoint.
-        setRelCardPositions((prev) => {
-          const next = new Map(prev)
-          next.set(rel.id, { dx: 0, dy: 0 })
-          return next
-        })
-        setSelectedRelId(rel.id)
-        // Immediately open label editor so user can name the relationship
-        setEditingRelId(rel.id)
-        setError(null)
-      } catch (err) {
-        console.error('[Canvas] Failed to create relationship:', err)
-        setError(`Failed to create relationship: ${err}`)
-      }
-      return
-    }
-
-    // --- RE-ATTACH GESTURE COMPLETE ---
-    if (reattachState) {
-      const { relId, end, fixedCardId } = reattachState
-      const mousePos = reattachMousePos
-      setReattachState(null)
-      setReattachMousePos(null)
-
-      if (!mousePos) return
-
-      // Find the topmost card under the cursor, excluding the fixed endpoint card
-      // (can't collapse both ends to the same card) and excluding the same card
-      // already attached to this end (no-op re-attach).
-      const rel = relationshipsRef.current.find((r) => r.id === relId)
-      if (!rel) return
-
-      const currentEndCardId = end === 'source' ? rel.sourceId : rel.targetId
-
-      let targetId: number | null = null
-      let bestArea = Infinity
-      for (const [id, candidate] of cardsRef.current) {
-        // Can't re-attach to the fixed endpoint card (self-loop)
-        if (id === fixedCardId) continue
-        const absPos = getAbsolutePosition(cardsRef.current, id)
-        const area = candidate.width * candidate.height
-        if (
-          mousePos.x >= absPos.x &&
-          mousePos.x <= absPos.x + candidate.width &&
-          mousePos.y >= absPos.y &&
-          mousePos.y <= absPos.y + candidate.height &&
-          area < bestArea
-        ) {
-          targetId = id
-          bestArea = area
-        }
-      }
-
-      // Released on empty canvas, or on the same card already on this end -- cancel
-      if (targetId === null || targetId === currentEndCardId) return
-
-      const newSourceId = end === 'source' ? targetId : rel.sourceId
-      const newTargetId = end === 'target' ? targetId : rel.targetId
-
-      // Optimistic update
-      const relsBefore = [...relationshipsRef.current]
-      setRelationships((prev) =>
-        prev.map((r) =>
-          r.id === relId ? { ...r, sourceId: newSourceId, targetId: newTargetId } : r
-        )
-      )
-      setSelectedRelId(relId)
-
-      try {
-        await db.reattachRelationship(relId, newSourceId, newTargetId)
-        setError(null)
-      } catch (err) {
-        console.error('[Canvas] Failed to reattach relationship:', err)
-        setError(`Failed to rewire relationship: ${err}`)
-        setRelationships(relsBefore)
-      }
-      return
-    }
-
-    if (isPanning) {
-      setIsPanning(false)
-      return
-    }
-
-    if (resizeState) {
-      // Snapshot state before clearing so we can diff pushed siblings below.
-      const stateBefore = new Map(cardsRef.current)
-      const card = cardsRef.current.get(resizeState.cardId)
-      setResizeState(null)
-
-      if (card) {
-        const nextCards = new Map(cardsRef.current)
-        setCards(nextCards)
-
-        try {
-          await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height)
-
-          // Persist every card that changed during the resize: ancestors that grew
-          // via autoResizeParent, siblings that were pushed via applyPushMode,
-          // and ancestors of those siblings. Diff nextCards against stateBefore
-          // and write any card whose position or size changed (excluding the
-          // resized card itself, which was already written above).
-          const changedWrites: Promise<void>[] = []
-          for (const [id, nc] of nextCards) {
-            if (id === resizeState.cardId) continue
-            const before = stateBefore.get(id)
-            if (
-              !before ||
-              nc.x !== before.x || nc.y !== before.y ||
-              nc.width !== before.width || nc.height !== before.height
-            ) {
-              changedWrites.push(
-                db.updateNodeLayout(id, mapId, nc.x, nc.y, nc.width, nc.height)
-              )
-            }
-          }
-          await Promise.all(changedWrites)
-
-          setError(null)
-        } catch (err) {
-          console.error('[Canvas] Failed to persist resize:', err)
-          setError('Failed to save resize. Changes may be lost.')
-          // Revert: restore the pre-resize size
-          setCards((prev) => {
-            const updated = new Map(prev)
-            const current = updated.get(resizeState.cardId)
-            if (!current) return prev
-            updated.set(resizeState.cardId, {
-              ...current,
-              width: resizeState.startWidth,
-              height: resizeState.startHeight,
-            })
-            return updated
-          })
-        }
-      }
-      return
-    }
-
-    if (!dragState) return
-
-    const { cardId, nestTargetId, absX: dragAbsX, absY: dragAbsY } = dragState
+  // Executes all nest / unnest / layout-only logic for a completed card drag.
+  // Callers are responsible for clearing dragState and dragStartCardsRef BEFORE
+  // calling this so that in-flight state updates see a clean drag state.
+  //
+  // ds           -- the dragState snapshot at the moment of drop
+  // startSnapshot -- the dragStartCardsRef snapshot (may be null if unavailable)
+  const performDrop = useCallback(async (
+    ds: DragState,
+    startSnapshot: Map<number, CardData> | null,
+  ) => {
+    const { cardId, nestTargetId, absX: dragAbsX, absY: dragAbsY } = ds
     const card = cardsRef.current.get(cardId)
-    setDragState(null)
-
     if (!card) return
 
     // M1: NESTING DISABLED -- just persist the new position
@@ -1490,14 +1297,12 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     //
     // Pushing mode: applyPushMode runs autoResizeParent during drag for right/bottom
     // expansions, but we still run normalizeChildPositions here on mouseup to catch
-    // any left/top boundary cleanup. The dragStartCardsRef snapshot (taken when the
-    // drag was promoted) is used as the baseline for the persist diff so that pushed
+    // any left/top boundary cleanup. The startSnapshot (taken when the drag was
+    // promoted) is used as the baseline for the persist diff so that pushed
     // siblings are included in the DB writes.
-    const preMouseUpCards = cardsRef.current
-    const dragStartSnapshot = dragStartCardsRef.current
-    dragStartCardsRef.current = null
+    const preDropCards = cardsRef.current
 
-    const finalCard = preMouseUpCards.get(cardId)
+    const finalCard = preDropCards.get(cardId)
     if (finalCard) {
       if (finalCard.parentId !== null) {
         // normalizeChildPositions may shift children; feed its result into
@@ -1513,7 +1318,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         // same-parent drops resolve overlaps the same way as new-parent drops.
         // applyPushMode already calls resizeOneParent at each ancestor level
         // internally, so no separate autoResizeParent call is needed.
-        const afterNorm = normalizeChildPositions(preMouseUpCards, finalCard.parentId)
+        const afterNorm = normalizeChildPositions(preDropCards, finalCard.parentId)
         let afterResize: Map<number, CardData>
         if (shiftHeldDuringDragRef.current) {
           afterResize = applyPushMode(afterNorm, cardId, 0, 0, 0, 0)
@@ -1523,20 +1328,20 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           afterResize = nextCards
         }
         const parentAfter = afterResize.get(finalCard.parentId)
-        const parentBefore = preMouseUpCards.get(finalCard.parentId)
+        const parentBefore = preDropCards.get(finalCard.parentId)
 
         // Determine which cards actually changed so we only write what changed.
         // normalizeChildPositions may have shifted children (left/up overflow fix),
         // autoResizeParent / applyPushMode may have grown the parent, and
         // applyDropPush may have repositioned the dragged card -- any of these
         // should trigger a state update + persist pass.
-        const normChanged = afterNorm !== preMouseUpCards
+        const normChanged = afterNorm !== preDropCards
         const resizeChanged =
           parentAfter &&
           parentBefore &&
           (parentAfter.width !== parentBefore.width || parentAfter.height !== parentBefore.height)
         const draggedAfter = afterResize.get(cardId)
-        const draggedBefore = preMouseUpCards.get(cardId)
+        const draggedBefore = preDropCards.get(cardId)
         const dropPushChanged =
           draggedAfter &&
           draggedBefore &&
@@ -1547,7 +1352,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
           // Persist all cards that differ from the pre-drag snapshot (covers
           // pushed siblings in pushing mode) AND cards changed by normalize/resize.
-          const baseline = dragStartSnapshot ?? preMouseUpCards
+          const baseline = startSnapshot ?? preDropCards
           const writes: Promise<void>[] = []
           for (const [id, card] of afterResize) {
             const before = baseline.get(id)
@@ -1579,9 +1384,9 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
       // No parent-level normalize/resize needed (or card is top-level).
       // Still need to persist any cards that moved (dragged card + pushed siblings).
-      const baseline = dragStartSnapshot ?? preMouseUpCards
+      const baseline = startSnapshot ?? preDropCards
       const writes: Promise<void>[] = []
-      for (const [id, card] of preMouseUpCards) {
+      for (const [id, card] of preDropCards) {
         const before = baseline.get(id)
         if (
           !before ||
@@ -1616,7 +1421,234 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       // descendants (children move with the parent, so their rel labels shift too).
       await persistRelCardPositions(getRelsForDraggedSubtree(cardId))
     }
-  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, reattachState, reattachMousePos, draggingRelCardId, relCardDragOffset, persistRelCardPositions, getRelsForDraggedSubtree, mapId, setSelectedId])
+  }, [persistRelCardPositions, getRelsForDraggedSubtree, mapId])
+
+  // Keep performDropRef in sync so handleCanvasMouseDown (defined before performDrop)
+  // can call the latest version via the ref without a forward-reference issue.
+  useEffect(() => { performDropRef.current = performDrop }, [performDrop])
+
+  // ---------------------------------------------------------------------------
+  // MOUSE UP (end drag, resize, or pan -- persist to DB)
+  // ---------------------------------------------------------------------------
+  const handleMouseUp = useCallback(async () => {
+    // If mouseup fires while pendingDrag was never promoted, it was just a
+    // click (or very short tap). Clear the pending state -- the card stays
+    // in the DOM, selection already happened in Card's handleMouseDown, and
+    // the resize handle is now visible for a selected card.
+    pendingDragRef.current = null
+
+    // --- RELATIONSHIP CARD DRAG END -- persist position ---
+    if (draggingRelCardId !== null) {
+      const relId = draggingRelCardId
+      setDraggingRelCardId(null)
+      setRelCardDragOffset(null)
+
+      // Find the relationship to get its relNodeId for DB persistence.
+      // The DB stores absolute canvas positions, so convert offset -> absolute here.
+      const rel = relationshipsRef.current.find((r) => r.id === relId)
+      if (rel && rel.relNodeId !== null) {
+        const stored = relCardPositionsRef.current.get(relId)
+        if (stored) {
+          const mid = computeRelMidpoint(cardsRef.current, rel)
+          if (mid) {
+            const absX = mid.x + stored.dx
+            const absY = mid.y + stored.dy
+            try {
+              await db.updateNodeLayout(rel.relNodeId, mapId, absX, absY, 80, 28)
+            } catch (err) {
+              console.error('[Canvas] Failed to persist relationship card position:', err)
+              setError('Failed to save relationship card position.')
+            }
+          }
+        }
+      }
+      return
+    }
+
+    // --- CONNECTION DRAW COMPLETE ---
+    if (connectingState) {
+      const { sourceId } = connectingState
+      const mousePos = connectingMousePos
+      setConnectingState(null)
+      setConnectingMousePos(null)
+
+      if (!mousePos) return
+
+      // Find the topmost card under the current mouse position (canvas coords),
+      // excluding the source card itself.
+      let targetId: number | null = null
+      let bestArea = Infinity
+      for (const [id, candidate] of cardsRef.current) {
+        if (id === sourceId) continue
+        const absPos = getAbsolutePosition(cardsRef.current, id)
+        const area = candidate.width * candidate.height
+        if (
+          mousePos.x >= absPos.x &&
+          mousePos.x <= absPos.x + candidate.width &&
+          mousePos.y >= absPos.y &&
+          mousePos.y <= absPos.y + candidate.height &&
+          area < bestArea
+        ) {
+          targetId = id
+          bestArea = area
+        }
+      }
+
+      if (targetId === null) return // Released on empty canvas -- cancel
+
+      try {
+        const rel = await db.createRelationship(sourceId, targetId, '', mapId)
+        setRelationships((prev) => [...prev, rel])
+        // Register the new rel with zero offset -- label starts at the midpoint.
+        setRelCardPositions((prev) => {
+          const next = new Map(prev)
+          next.set(rel.id, { dx: 0, dy: 0 })
+          return next
+        })
+        setSelectedRelId(rel.id)
+        // Immediately open label editor so user can name the relationship
+        setEditingRelId(rel.id)
+        setError(null)
+      } catch (err) {
+        console.error('[Canvas] Failed to create relationship:', err)
+        setError(`Failed to create relationship: ${err}`)
+      }
+      return
+    }
+
+    // --- RE-ATTACH GESTURE COMPLETE ---
+    if (reattachState) {
+      const { relId, end, fixedCardId } = reattachState
+      const mousePos = reattachMousePos
+      setReattachState(null)
+      setReattachMousePos(null)
+
+      if (!mousePos) return
+
+      // Find the topmost card under the cursor, excluding the fixed endpoint card
+      // (can't collapse both ends to the same card) and excluding the same card
+      // already attached to this end (no-op re-attach).
+      const rel = relationshipsRef.current.find((r) => r.id === relId)
+      if (!rel) return
+
+      const currentEndCardId = end === 'source' ? rel.sourceId : rel.targetId
+
+      let targetId: number | null = null
+      let bestArea = Infinity
+      for (const [id, candidate] of cardsRef.current) {
+        // Can't re-attach to the fixed endpoint card (self-loop)
+        if (id === fixedCardId) continue
+        const absPos = getAbsolutePosition(cardsRef.current, id)
+        const area = candidate.width * candidate.height
+        if (
+          mousePos.x >= absPos.x &&
+          mousePos.x <= absPos.x + candidate.width &&
+          mousePos.y >= absPos.y &&
+          mousePos.y <= absPos.y + candidate.height &&
+          area < bestArea
+        ) {
+          targetId = id
+          bestArea = area
+        }
+      }
+
+      // Released on empty canvas, or on the same card already on this end -- cancel
+      if (targetId === null || targetId === currentEndCardId) return
+
+      const newSourceId = end === 'source' ? targetId : rel.sourceId
+      const newTargetId = end === 'target' ? targetId : rel.targetId
+
+      // Optimistic update
+      const relsBefore = [...relationshipsRef.current]
+      setRelationships((prev) =>
+        prev.map((r) =>
+          r.id === relId ? { ...r, sourceId: newSourceId, targetId: newTargetId } : r
+        )
+      )
+      setSelectedRelId(relId)
+
+      try {
+        await db.reattachRelationship(relId, newSourceId, newTargetId)
+        setError(null)
+      } catch (err) {
+        console.error('[Canvas] Failed to reattach relationship:', err)
+        setError(`Failed to rewire relationship: ${err}`)
+        setRelationships(relsBefore)
+      }
+      return
+    }
+
+    if (isPanning) {
+      setIsPanning(false)
+      return
+    }
+
+    if (resizeState) {
+      // Snapshot state before clearing so we can diff pushed siblings below.
+      const stateBefore = new Map(cardsRef.current)
+      const card = cardsRef.current.get(resizeState.cardId)
+      setResizeState(null)
+
+      if (card) {
+        const nextCards = new Map(cardsRef.current)
+        setCards(nextCards)
+
+        try {
+          await db.updateNodeLayout(card.id, mapId, card.x, card.y, card.width, card.height)
+
+          // Persist every card that changed during the resize: ancestors that grew
+          // via autoResizeParent, siblings that were pushed via applyPushMode,
+          // and ancestors of those siblings. Diff nextCards against stateBefore
+          // and write any card whose position or size changed (excluding the
+          // resized card itself, which was already written above).
+          const changedWrites: Promise<void>[] = []
+          for (const [id, nc] of nextCards) {
+            if (id === resizeState.cardId) continue
+            const before = stateBefore.get(id)
+            if (
+              !before ||
+              nc.x !== before.x || nc.y !== before.y ||
+              nc.width !== before.width || nc.height !== before.height
+            ) {
+              changedWrites.push(
+                db.updateNodeLayout(id, mapId, nc.x, nc.y, nc.width, nc.height)
+              )
+            }
+          }
+          await Promise.all(changedWrites)
+
+          setError(null)
+        } catch (err) {
+          console.error('[Canvas] Failed to persist resize:', err)
+          setError('Failed to save resize. Changes may be lost.')
+          // Revert: restore the pre-resize size
+          setCards((prev) => {
+            const updated = new Map(prev)
+            const current = updated.get(resizeState.cardId)
+            if (!current) return prev
+            updated.set(resizeState.cardId, {
+              ...current,
+              width: resizeState.startWidth,
+              height: resizeState.startHeight,
+            })
+            return updated
+          })
+        }
+      }
+      return
+    }
+
+    if (!dragState) return
+
+    // Capture and clear drag state before performing the drop, so that any
+    // re-entrancy (e.g. a state update triggering a re-render) sees no active drag.
+    const ds = dragState
+    const startSnapshot = dragStartCardsRef.current
+    dragStartCardsRef.current = null
+    setDragState(null)
+
+    await performDrop(ds, startSnapshot)
+  }, [dragState, isPanning, resizeState, connectingState, connectingMousePos, reattachState, reattachMousePos, draggingRelCardId, relCardDragOffset, performDrop, mapId, setSelectedId])
 
   // ---------------------------------------------------------------------------
   // CREATE NEW CARD (double-click on empty canvas)
@@ -2026,10 +2058,33 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   }, [deleteConfirm, handleCancelDelete])
 
   // ---------------------------------------------------------------------------
-  // CREATE CARD KEYBOARD SHORTCUT ("C" key)
+  // CREATE CARD KEYBOARD SHORTCUT ("C" key) -- placement mode
   // ---------------------------------------------------------------------------
+  // Pressing C creates a card at the current cursor position and enters
+  // placement mode: the card follows the mouse (reusing the existing drag
+  // system) and is committed on the next mousedown (via handleCanvasMouseDown).
+  // Pressing Escape while in placement mode cancels and deletes the card.
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
+      // --- Escape: cancel placement mode ---
+      if (e.key === 'Escape' && placementCardIdRef.current !== null) {
+        const cancelId = placementCardIdRef.current
+        placementCardIdRef.current = null
+        setDragState(null)
+        dragStartCardsRef.current = null
+        // Remove from in-memory state immediately
+        setCards((prev) => {
+          const updated = new Map(prev)
+          updated.delete(cancelId)
+          return updated
+        })
+        // Best-effort DB delete -- don't block or surface errors to the user
+        db.deleteNode(cancelId).catch((err) => {
+          console.error('[Canvas] Failed to delete cancelled placement card:', err)
+        })
+        return
+      }
+
       if (e.key !== 'c' && e.key !== 'C') return
       // Don't fire when typing inside a text field or contenteditable
       const active = document.activeElement
@@ -2064,7 +2119,21 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           return updated
         })
         setSelectedId(id)
-        setNewCardId(id)
+
+        // Enter placement mode: take a drag-start snapshot and activate dragState
+        // with offsetX/offsetY = 0 so the cursor stays at the top-left of the card.
+        // mousemove will drive the ghost position exactly as it does for a normal drag.
+        dragStartCardsRef.current = new Map(cardsRef.current)
+        setDragState({
+          cardId: id,
+          offsetX: 0,
+          offsetY: 0,
+          nestTargetId: null,
+          absX: canvasX,
+          absY: canvasY,
+        })
+        placementCardIdRef.current = id
+
         setError(null)
       } catch (err) {
         console.error('[Canvas] Failed to create card:', err)
@@ -2263,6 +2332,25 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         onWheel={handleWheel}
         onMouseDown={handleCanvasMouseDown}
         onMouseDownCapture={(e) => {
+          // --- PLACEMENT MODE COMMIT (capture phase) ---
+          // Intercept ALL left mousedowns (even on cards) while placement mode is
+          // active, so clicks on existing cards also commit the drop. Capture phase
+          // fires before card stopPropagation() can block us.
+          if (e.button === 0 && placementCardIdRef.current !== null) {
+            e.stopPropagation()
+            const id = placementCardIdRef.current
+            placementCardIdRef.current = null
+            const ds = dragState
+            const startSnapshot = dragStartCardsRef.current
+            dragStartCardsRef.current = null
+            setDragState(null)
+            if (ds) {
+              performDropRef.current?.(ds, startSnapshot).then(() => {
+                setNewCardId(id)
+              })
+            }
+            return
+          }
           // When Space is held, intercept ALL mousedowns (even on cards) to start panning.
           // Capture phase fires before card mousedown handlers, so e.stopPropagation()
           // prevents them from starting a card drag.
