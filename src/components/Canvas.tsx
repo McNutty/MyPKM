@@ -11,7 +11,7 @@
  *   onSelectCard    -- callback when the user selects/deselects a card
  */
 
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo, useImperativeHandle, forwardRef } from 'react'
 import type { CardData, CanvasViewport, DragState, ResizeState, RelationshipData, ConnectingState, ReattachState } from '../store/types'
 import {
   getAbsolutePosition,
@@ -146,19 +146,34 @@ function isTextEditing(): boolean {
 // PROPS
 // ============================================================================
 
+export interface CanvasHandle {
+  zoomToFit: () => void
+}
+
 interface CanvasProps {
   mapId: number
   selectedCardId: number | null
   onSelectCard: (id: number | null) => void
   /** Called when the user enters a model card -- navigates to its backing map. */
   onNavigateToMap?: (mapId: number) => void
+  /** Called whenever the viewport zoom level changes -- used by the top bar. */
+  onZoomChange?: (zoom: number) => void
+  /** Forwarded error string for display in the top bar. */
+  onErrorChange?: (error: string | null) => void
 }
 
 // ============================================================================
 // CANVAS COMPONENT
 // ============================================================================
 
-export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectCard, onNavigateToMap }) => {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(({
+  mapId,
+  selectedCardId,
+  onSelectCard,
+  onNavigateToMap,
+  onZoomChange,
+  onErrorChange,
+}, ref) => {
   // ---------------------------------------------------------------------------
   // STATE
   // ---------------------------------------------------------------------------
@@ -402,6 +417,19 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
     setViewport({ panX, panY, zoom })
   }, [])
+
+  // Expose zoomToFit to parent via ref so the top bar can call it directly.
+  useImperativeHandle(ref, () => ({ zoomToFit }), [zoomToFit])
+
+  // Notify parent whenever zoom level changes (drives the top bar display).
+  useEffect(() => {
+    onZoomChange?.(viewport.zoom)
+  }, [viewport.zoom, onZoomChange])
+
+  // Notify parent whenever the error state changes (drives the top bar display).
+  useEffect(() => {
+    onErrorChange?.(error)
+  }, [error, onErrorChange])
 
   // ---------------------------------------------------------------------------
   // PAN & ZOOM
@@ -2373,48 +2401,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
-      {/* Toolbar bar -- zoom controls only (breadcrumbs are in App.tsx above this component) */}
-      <div
-        style={{
-          height: 36,
-          backgroundColor: '#fff',
-          borderBottom: '1px solid #e0e0e0',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 16px',
-          gap: 8,
-          flexShrink: 0,
-          zIndex: 2000,
-        }}
-      >
-        <div style={{ flex: 1 }} />
-        {/* Error indicator */}
-        {error && (
-          <span style={{ fontSize: 12, color: '#c62828', marginRight: 8 }}>
-            {error}
-          </span>
-        )}
-        {/* Zoom-to-fit button */}
-        <button
-          onClick={zoomToFit}
-          title="Zoom to fit all cards (Ctrl+0)"
-          style={{
-            padding: '4px 10px',
-            fontSize: 12,
-            borderRadius: 4,
-            border: '1px solid #bdbdbd',
-            background: '#fafafa',
-            cursor: 'pointer',
-            color: '#444',
-          }}
-        >
-          Fit
-        </button>
-        <span style={{ fontSize: 12, color: '#999', minWidth: 40, textAlign: 'right' }}>
-          {Math.round(viewport.zoom * 100)}%
-        </span>
-      </div>
-
       {/* Canvas area */}
       <div
         ref={canvasRef}
@@ -2741,4 +2727,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       )}
     </div>
   )
-}
+})
+
+Canvas.displayName = 'Canvas'

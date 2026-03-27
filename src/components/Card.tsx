@@ -287,29 +287,19 @@ export const Card: React.FC<CardProps> = React.memo(({
         top: card.y,
         width: card.width,
         height: card.height,
-        // Model cards get a visually distinct treatment: deep indigo gradient,
-        // a thicker border, and a shadow tinted in the brand colour. This makes
-        // them immediately recognisable as "portals to another canvas" at any
-        // zoom level, unlike concept cards which are white/light grey.
-        background: isModel
-          ? 'linear-gradient(135deg, #1e3a5f 0%, #1e40af 100%)'
-          : card.color,
+        background: isModel ? '#dbeafe' : card.color,
         border: isDropTarget
           ? '2px dashed #2196f3'
           : isSelected
           ? '2px solid #60a5fa'
           : isModel
-          ? '2px solid #3b82f6'
+          ? '1px solid #93c5fd'
           : '1px solid #bdbdbd',
-        borderRadius: isModel ? 8 : 6,
+        borderRadius: 6,
         boxShadow: isDragging
           ? '0 8px 24px rgba(0,0,0,0.2)'
-          : isSelected && isModel
-          ? '0 4px 16px rgba(59,130,246,0.5)'
           : isSelected
           ? '0 2px 8px rgba(25,118,210,0.3)'
-          : isModel
-          ? '0 2px 8px rgba(30,64,175,0.35)'
           : '0 1px 3px rgba(0,0,0,0.1)',
         cursor: isConnecting ? 'crosshair' : isEditing ? 'default' : isInResizeZone ? 'se-resize' : 'grab',
         userSelect: 'none',
@@ -341,38 +331,27 @@ export const Card: React.FC<CardProps> = React.memo(({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          borderBottom: isModel ? '1px solid rgba(255,255,255,0.15)' : '1px solid rgba(0,0,0,0.12)',
+          borderBottom: '1px solid rgba(0,0,0,0.12)',
           cursor: isConnecting ? 'crosshair' : isEditing ? 'text' : 'grab',
           overflow: 'hidden',
         }}
         onMouseDown={isEditing ? undefined : handleMouseDown}
         onDoubleClick={handleHeaderDoubleClick}
       >
-        {/* Model card icon -- layered pages icon + "MODEL" label */}
+        {/* Model card icon -- small grid symbol */}
         {isModel && (
           <span
             title="Model card -- double-click or press Enter to enter"
             style={{
               flexShrink: 0,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
+              fontSize: 11,
+              color: '#2563eb',
+              lineHeight: 1,
               pointerEvents: 'none',
               userSelect: 'none',
             }}
           >
-            {/* Stacked-pages icon (unicode approximation) */}
-            <span style={{ fontSize: 15, color: '#93c5fd', lineHeight: 1 }}>&#9776;</span>
-            <span style={{
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              color: '#93c5fd',
-              textTransform: 'uppercase',
-              lineHeight: 1,
-            }}>
-              Model
-            </span>
+            &#9635;
           </span>
         )}
 
@@ -394,7 +373,7 @@ export const Card: React.FC<CardProps> = React.memo(({
               fontSize: titleFontSize,
               fontFamily: 'inherit',
               fontWeight: 600,
-              color: isModel ? '#e0f2fe' : '#333',
+              color: '#333',
               cursor: 'text',
               lineHeight: 1.4,
               padding: 0,
@@ -408,9 +387,7 @@ export const Card: React.FC<CardProps> = React.memo(({
               flex: 1,
               fontSize: titleFontSize,
               fontWeight: 600,
-              color: isModel
-                ? (card.content ? '#e0f2fe' : 'rgba(224,242,254,0.5)')
-                : (card.content ? '#333' : '#aaa'),
+              color: card.content ? '#333' : '#aaa',
               fontStyle: card.content ? 'normal' : 'italic',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
@@ -427,7 +404,7 @@ export const Card: React.FC<CardProps> = React.memo(({
         {children.length > 0 && (
           <span style={{
             flexShrink: 0,
-            color: isModel ? 'rgba(224,242,254,0.6)' : '#999',
+            color: '#999',
             fontWeight: 400,
             fontSize: 11,
             pointerEvents: 'none',
@@ -446,10 +423,10 @@ export const Card: React.FC<CardProps> = React.memo(({
               marginLeft: 2,
               width: 20,
               height: 20,
-              border: '1px solid rgba(147,197,253,0.6)',
+              border: '1px solid #93c5fd',
               borderRadius: 4,
-              backgroundColor: 'rgba(255,255,255,0.15)',
-              color: '#e0f2fe',
+              backgroundColor: 'rgba(255,255,255,0.6)',
+              color: '#1d4ed8',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
