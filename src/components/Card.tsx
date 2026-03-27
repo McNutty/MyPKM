@@ -65,6 +65,11 @@ interface CardProps {
    * child at the App render site.
    */
   hoveredCardId?: number | null
+  /**
+   * Called when the user clicks the "enter" button on a model card (nodeType='model').
+   * Navigates into the model's backing map.
+   */
+  onEnterModel?: (cardId: number) => void
 }
 
 export const Card: React.FC<CardProps> = React.memo(({
@@ -87,6 +92,7 @@ export const Card: React.FC<CardProps> = React.memo(({
   isConnecting,
   isHovered = false,
   hoveredCardId = null,
+  onEnterModel,
 }) => {
   const children = getChildren(allCards, card.id)
   const isNestTarget = dragState?.nestTargetId === card.id
@@ -249,6 +255,15 @@ export const Card: React.FC<CardProps> = React.memo(({
     [card.id, onConnectStart]
   )
 
+  const handleEnterModelClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      e.preventDefault()
+      if (onEnterModel) onEnterModel(card.id)
+    },
+    [card.id, onEnterModel]
+  )
+
   // Double-clicking the body area (below the header) resets the card to its
   // default size. stopPropagation prevents the canvas-level double-click from
   // firing (which would create a new card).
@@ -260,6 +275,7 @@ export const Card: React.FC<CardProps> = React.memo(({
     [card.id, onResetSize]
   )
 
+  const isModel = card.nodeType === 'model'
   const titleFontSize = Math.max(10, Math.min(14, 14 / Math.max(1, card.depth * 0.3 + 0.7)))
 
   return (
@@ -271,17 +287,29 @@ export const Card: React.FC<CardProps> = React.memo(({
         top: card.y,
         width: card.width,
         height: card.height,
-        backgroundColor: card.color,
+        // Model cards get a visually distinct treatment: deep indigo gradient,
+        // a thicker border, and a shadow tinted in the brand colour. This makes
+        // them immediately recognisable as "portals to another canvas" at any
+        // zoom level, unlike concept cards which are white/light grey.
+        background: isModel
+          ? 'linear-gradient(135deg, #1e3a5f 0%, #1e40af 100%)'
+          : card.color,
         border: isDropTarget
           ? '2px dashed #2196f3'
           : isSelected
-          ? '2px solid #1976d2'
+          ? '2px solid #60a5fa'
+          : isModel
+          ? '2px solid #3b82f6'
           : '1px solid #bdbdbd',
-        borderRadius: 6,
+        borderRadius: isModel ? 8 : 6,
         boxShadow: isDragging
           ? '0 8px 24px rgba(0,0,0,0.2)'
+          : isSelected && isModel
+          ? '0 4px 16px rgba(59,130,246,0.5)'
           : isSelected
           ? '0 2px 8px rgba(25,118,210,0.3)'
+          : isModel
+          ? '0 2px 8px rgba(30,64,175,0.35)'
           : '0 1px 3px rgba(0,0,0,0.1)',
         cursor: isConnecting ? 'crosshair' : isEditing ? 'default' : isInResizeZone ? 'se-resize' : 'grab',
         userSelect: 'none',
@@ -313,13 +341,41 @@ export const Card: React.FC<CardProps> = React.memo(({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          borderBottom: '1px solid rgba(0,0,0,0.12)',
+          borderBottom: isModel ? '1px solid rgba(255,255,255,0.15)' : '1px solid rgba(0,0,0,0.12)',
           cursor: isConnecting ? 'crosshair' : isEditing ? 'text' : 'grab',
           overflow: 'hidden',
         }}
         onMouseDown={isEditing ? undefined : handleMouseDown}
         onDoubleClick={handleHeaderDoubleClick}
       >
+        {/* Model card icon -- layered pages icon + "MODEL" label */}
+        {isModel && (
+          <span
+            title="Model card -- double-click or press Enter to enter"
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          >
+            {/* Stacked-pages icon (unicode approximation) */}
+            <span style={{ fontSize: 15, color: '#93c5fd', lineHeight: 1 }}>&#9776;</span>
+            <span style={{
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              color: '#93c5fd',
+              textTransform: 'uppercase',
+              lineHeight: 1,
+            }}>
+              Model
+            </span>
+          </span>
+        )}
+
         {isEditing ? (
           <textarea
             ref={textareaRef}
@@ -338,7 +394,7 @@ export const Card: React.FC<CardProps> = React.memo(({
               fontSize: titleFontSize,
               fontFamily: 'inherit',
               fontWeight: 600,
-              color: '#333',
+              color: isModel ? '#e0f2fe' : '#333',
               cursor: 'text',
               lineHeight: 1.4,
               padding: 0,
@@ -352,7 +408,9 @@ export const Card: React.FC<CardProps> = React.memo(({
               flex: 1,
               fontSize: titleFontSize,
               fontWeight: 600,
-              color: card.content ? '#333' : '#aaa',
+              color: isModel
+                ? (card.content ? '#e0f2fe' : 'rgba(224,242,254,0.5)')
+                : (card.content ? '#333' : '#aaa'),
               fontStyle: card.content ? 'normal' : 'italic',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
@@ -369,13 +427,41 @@ export const Card: React.FC<CardProps> = React.memo(({
         {children.length > 0 && (
           <span style={{
             flexShrink: 0,
-            color: '#999',
+            color: isModel ? 'rgba(224,242,254,0.6)' : '#999',
             fontWeight: 400,
             fontSize: 11,
             pointerEvents: 'none',
           }}>
             ({children.length})
           </span>
+        )}
+
+        {/* Enter model button -- visible on hover, only for model cards */}
+        {isModel && isHovered && !isDragging && !dragState && onEnterModel && (
+          <button
+            onMouseDown={handleEnterModelClick}
+            title="Enter model (or press Enter)"
+            style={{
+              flexShrink: 0,
+              marginLeft: 2,
+              width: 20,
+              height: 20,
+              border: '1px solid rgba(147,197,253,0.6)',
+              borderRadius: 4,
+              backgroundColor: 'rgba(255,255,255,0.15)',
+              color: '#e0f2fe',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1,
+              padding: 0,
+            }}
+          >
+            &#8594;
+          </button>
         )}
       </div>
 
@@ -437,6 +523,7 @@ export const Card: React.FC<CardProps> = React.memo(({
               isConnecting={isConnecting}
               hoveredCardId={hoveredCardId}
               isHovered={hoveredCardId === child.id}
+              onEnterModel={onEnterModel}
             />
           )
         })}

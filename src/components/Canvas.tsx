@@ -123,6 +123,26 @@ function findCardAtPoint(
 }
 
 // ============================================================================
+// SHARED KEYBOARD GUARD
+// ============================================================================
+
+/**
+ * Returns true if the browser currently has focus inside a text editing
+ * context: an <input>, <textarea>, or any element with contenteditable=true.
+ *
+ * ALL canvas keyboard shortcuts must call this guard before acting, so that
+ * typing inside card titles never accidentally triggers canvas actions.
+ */
+function isTextEditing(): boolean {
+  const el = document.activeElement
+  if (!el) return false
+  const tag = (el as HTMLElement).tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return true
+  if ((el as HTMLElement).isContentEditable) return true
+  return false
+}
+
+// ============================================================================
 // PROPS
 // ============================================================================
 
@@ -130,13 +150,15 @@ interface CanvasProps {
   mapId: number
   selectedCardId: number | null
   onSelectCard: (id: number | null) => void
+  /** Called when the user enters a model card -- navigates to its backing map. */
+  onNavigateToMap?: (mapId: number) => void
 }
 
 // ============================================================================
 // CANVAS COMPONENT
 // ============================================================================
 
-export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectCard }) => {
+export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectCard, onNavigateToMap }) => {
   // ---------------------------------------------------------------------------
   // STATE
   // ---------------------------------------------------------------------------
@@ -462,18 +484,9 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   // Guard: skip when a text input / textarea / contenteditable is focused so
   // Space still works normally while editing card labels.
   useEffect(() => {
-    const isTextFocused = () => {
-      const el = document.activeElement
-      if (!el) return false
-      const tag = (el as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return true
-      if ((el as HTMLElement).isContentEditable) return true
-      return false
-    }
-
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return
-      if (isTextFocused()) return
+      if (isTextEditing()) return
       if (spaceHeldRef.current) return // already held -- suppress repeated keydown events
       e.preventDefault()
       spaceHeldRef.current = true
@@ -1698,6 +1711,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
+          nodeType: 'card',
         }
         setCards((prev) => {
           const updated = new Map(prev)
@@ -1900,6 +1914,20 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   )
 
   // ---------------------------------------------------------------------------
+  // ENTER MODEL CARD -- navigate into its backing map
+  // ---------------------------------------------------------------------------
+  const handleEnterModel = useCallback(async (cardId: number) => {
+    if (!onNavigateToMap) return
+    try {
+      const backingMapId = await db.getModelMapId(cardId)
+      onNavigateToMap(backingMapId)
+    } catch (err) {
+      console.error('[Canvas] Failed to get model map id:', err)
+      setError(`Failed to enter model: ${err}`)
+    }
+  }, [onNavigateToMap])
+
+  // ---------------------------------------------------------------------------
   // DELETE CARD (Delete key when a card is selected)
   // ---------------------------------------------------------------------------
 
@@ -1926,6 +1954,15 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     const deletedIds = new Set([cardId, ...descendants])
 
     try {
+      // Clean up backing maps for any model cards in the deleted subtree
+      const modelIds = [...deletedIds].filter((id) => snapshot.get(id)?.nodeType === 'model')
+      await Promise.all(
+        modelIds.map(async (id) => {
+          const backingMapId = await db.getModelMapId(id).catch(() => null)
+          if (backingMapId !== null) await db.deleteMap(backingMapId).catch(() => null)
+        })
+      )
+
       await db.deleteNodeCascade(cardId)
       setError(null)
 
@@ -1978,9 +2015,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key === 'Delete' && selectedId !== null) {
         // Guard: let the browser handle Delete normally when a text field is focused
-        const el = document.activeElement
-        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
-        if (el instanceof HTMLElement && el.isContentEditable) return
+        if (isTextEditing()) return
 
         // Don't double-trigger if the confirmation dialog is already showing
         if (deleteConfirm !== null) return
@@ -1992,6 +2027,12 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         if (descendants.size === 0) {
           // Leaf card: delete directly, no confirmation needed
           try {
+            // If this is a model card, delete its backing map first
+            const card = currentCards.get(id)
+            if (card?.nodeType === 'model') {
+              const backingMapId = await db.getModelMapId(id).catch(() => null)
+              if (backingMapId !== null) await db.deleteMap(backingMapId).catch(() => null)
+            }
             await db.deleteNode(id)
             setError(null)
             setCards((prev) => { const updated = new Map(prev); updated.delete(id); return updated })
@@ -2004,6 +2045,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           // Card with parts: show confirmation dialog
           setDeleteConfirm({ cardId: id, descendantCount: descendants.size })
         }
+      } else if (e.key === 'Enter' && selectedId !== null) {
+        // Enter key: navigate into a model card if one is selected.
+        // Guard first -- Enter must not fire while the user is typing a title.
+        if (isTextEditing()) return
+        const card = cardsRef.current.get(selectedId)
+        if (card?.nodeType === 'model') {
+          handleEnterModel(selectedId)
+        }
       } else if (e.key === 'Escape') {
         setSelectedId(null)
       }
@@ -2011,7 +2060,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedId, deleteConfirm, collectDescendants, setSelectedId])
+  }, [selectedId, deleteConfirm, collectDescendants, setSelectedId, handleEnterModel])
 
   // ---------------------------------------------------------------------------
   // RELATIONSHIP KEYBOARD ACTIONS (Delete, F to flip, Escape)
@@ -2114,25 +2163,13 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       // --- "r" / "l": enter keyboard-initiated connecting mode ---
       // The next mousedown will pick the source card and hand off to handleConnectStart.
       if (e.key === 'r' || e.key === 'R' || e.key === 'l' || e.key === 'L') {
-        // Don't fire when typing inside a text field or contenteditable
-        const active = document.activeElement
-        if (
-          active instanceof HTMLInputElement ||
-          active instanceof HTMLTextAreaElement ||
-          (active instanceof HTMLElement && active.isContentEditable)
-        ) return
+        if (isTextEditing()) return
         setConnectingMode(true)
         return
       }
 
       if (e.key !== 'c' && e.key !== 'C') return
-      // Don't fire when typing inside a text field or contenteditable
-      const active = document.activeElement
-      if (
-        active instanceof HTMLInputElement ||
-        active instanceof HTMLTextAreaElement ||
-        (active instanceof HTMLElement && active.isContentEditable)
-      ) return
+      if (isTextEditing()) return
 
       // Convert the last known mouse position to canvas coordinates
       const rect = canvasRef.current?.getBoundingClientRect()
@@ -2152,6 +2189,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           parentId: null,
           depth: 0,
           color: getDepthColor(0),
+          nodeType: 'card',
         }
         setCards((prev) => {
           const updated = new Map(prev)
@@ -2178,6 +2216,66 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       } catch (err) {
         console.error('[Canvas] Failed to create card:', err)
         setError(`Failed to create card: ${err}`)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [viewport, mapId, setSelectedId])
+
+  // ---------------------------------------------------------------------------
+  // CREATE MODEL CARD KEYBOARD SHORTCUT ("M" key) -- same placement flow as "C"
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.key !== 'm' && e.key !== 'M') return
+      if (isTextEditing()) return
+      // Don't fire if placement mode is already active
+      if (placementCardIdRef.current !== null) return
+
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const canvasX = (lastMouseRef.current.clientX - rect.left - viewport.panX) / viewport.zoom
+      const canvasY = (lastMouseRef.current.clientY - rect.top - viewport.panY) / viewport.zoom
+
+      try {
+        const result = await db.createModelCard(mapId, '', canvasX, canvasY, 200, 120)
+        const { node_id: id } = result
+        const newCard: CardData = {
+          id,
+          content: '',
+          x: canvasX,
+          y: canvasY,
+          width: 200,
+          height: 120,
+          parentId: null,
+          depth: 0,
+          color: getDepthColor(0),
+          nodeType: 'model',
+        }
+        setCards((prev) => {
+          const updated = new Map(prev)
+          updated.set(id, newCard)
+          return updated
+        })
+        setSelectedId(id)
+
+        // Enter placement mode (same as "c")
+        dragStartCardsRef.current = new Map(cardsRef.current)
+        setDragState({
+          cardId: id,
+          offsetX: 0,
+          offsetY: 0,
+          nestTargetId: null,
+          absX: canvasX,
+          absY: canvasY,
+        })
+        placementCardIdRef.current = id
+
+        setError(null)
+      } catch (err) {
+        console.error('[Canvas] Failed to create model card:', err)
+        setError(`Failed to create model card: ${err}`)
       }
     }
 
@@ -2272,29 +2370,10 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     return { ...c, x: dragState.absX, y: dragState.absY, parentId: null }
   })()
 
-  // Task 4: Breadcrumb -- walk the ancestor chain of the selected card.
-  // Result is ordered root-first: ["Canvas", "Bicycle", "Wheels", "Front Wheel"]
-  // This is display-only in M2; clicking segments is deferred to M3 navigation.
-  const breadcrumb: Array<{ id: number | null; label: string }> = [
-    { id: null, label: 'Canvas' },
-  ]
-  if (selectedId !== null) {
-    const chain: Array<{ id: number; label: string }> = []
-    let current = cards.get(selectedId)
-    while (current) {
-      chain.unshift({
-        id: current.id,
-        label: current.content || `Card ${current.id}`,
-      })
-      current = current.parentId !== null ? cards.get(current.parentId) : undefined
-    }
-    breadcrumb.push(...chain)
-  }
-
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
-      {/* Breadcrumb bar */}
+      {/* Toolbar bar -- zoom controls only (breadcrumbs are in App.tsx above this component) */}
       <div
         style={{
           height: 36,
@@ -2308,28 +2387,6 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           zIndex: 2000,
         }}
       >
-        {/* Ancestor trail -- display only in M2, navigation in M3 */}
-        {breadcrumb.map((crumb, index) => (
-          <React.Fragment key={crumb.id ?? 'root'}>
-            {index > 0 && (
-              <span style={{ fontSize: 12, color: '#bbb', userSelect: 'none' }}>{'>'}</span>
-            )}
-            <span
-              style={{
-                fontSize: 13,
-                fontWeight: index === breadcrumb.length - 1 ? 600 : 400,
-                color: index === breadcrumb.length - 1 ? '#333' : '#888',
-                maxWidth: 140,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                userSelect: 'none',
-              }}
-            >
-              {crumb.label}
-            </span>
-          </React.Fragment>
-        ))}
         <div style={{ flex: 1 }} />
         {/* Error indicator */}
         {error && (
@@ -2539,6 +2596,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
                 isConnecting={connectingState !== null || connectingMode}
                 isHovered={hoveredCardId === card.id}
                 hoveredCardId={hoveredCardId}
+                onEnterModel={handleEnterModel}
               />
             )
           })}
@@ -2565,6 +2623,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               zoom={viewport.zoom}
               ghostZIndex={10000}
               isHovered={false}
+              onEnterModel={handleEnterModel}
             />
           )}
         </div>
@@ -2586,7 +2645,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               userSelect: 'none',
             }}
           >
-            Space: Pan&nbsp;&nbsp;·&nbsp;&nbsp;C: New card&nbsp;&nbsp;·&nbsp;&nbsp;R: Relationship&nbsp;&nbsp;·&nbsp;&nbsp;Double-click: New card
+            Space: Pan&nbsp;&nbsp;·&nbsp;&nbsp;C: New card&nbsp;&nbsp;·&nbsp;&nbsp;M: New model&nbsp;&nbsp;·&nbsp;&nbsp;R: Relationship&nbsp;&nbsp;·&nbsp;&nbsp;Double-click: New card
           </div>
         )}
 

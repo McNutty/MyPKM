@@ -872,6 +872,27 @@ pub fn delete_map(
     let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
 
     // ----------------------------------------------------------------
+    // 0. Guard: prevent deletion of the Home map (node_id IS NULL).
+    // ----------------------------------------------------------------
+    let node_id_val: Option<i64> = conn
+        .query_row(
+            "SELECT node_id FROM maps WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                format!("Map {} not found", id)
+            } else {
+                sql_err("delete_map home guard", e)
+            }
+        })?;
+
+    if node_id_val.is_none() {
+        return Err("Cannot delete the Home map".to_string());
+    }
+
+    // ----------------------------------------------------------------
     // 1. Verify the map exists and collect all node IDs on this map.
     // ----------------------------------------------------------------
     let map_exists: bool = conn
@@ -1155,4 +1176,227 @@ pub fn update_node_parent(
             }
         }
     }
+}
+
+// ============================================================
+// Model card commands
+// ============================================================
+
+/// Result returned by create_model_card.
+/// Carries all IDs the frontend needs to update its state immediately.
+#[derive(Debug, Serialize)]
+pub struct CreateModelResult {
+    pub node_id: i64,
+    pub layout_id: i64,
+    pub map_id: i64,
+    pub name: String,
+}
+
+/// One item in the breadcrumb path from Home down to a given map.
+#[derive(Debug, Serialize)]
+pub struct BreadcrumbItem {
+    pub map_id: i64,
+    pub name: String,
+}
+
+/// Create a model card on `map_id` and provision a new backing map for it.
+///
+/// In a single transaction:
+///   1. INSERT a node (node_type='model') whose content is `name`.
+///   2. INSERT a layout row placing it at (x, y, width, height) on `map_id`.
+///   3. INSERT a new map row (name=`name`) linked to the new node via `node_id`.
+///
+/// Returns node_id, layout_id, the new backing map_id, and name.
+///
+/// Matches: `DbInterface.createModelCard(mapId, name, x, y, width, height)`
+#[tauri::command]
+pub fn create_model_card(
+    state: tauri::State<'_, Mutex<Connection>>,
+    map_id: i64,
+    name: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<CreateModelResult, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    conn.execute("BEGIN", [])
+        .map_err(|e| sql_err("BEGIN create_model_card", e))?;
+
+    let result = (|| -> Result<CreateModelResult, rusqlite::Error> {
+        // 1. Create the model node.
+        conn.execute(
+            "INSERT INTO nodes (parent_id, content, node_type, created_at, updated_at) \
+             VALUES (NULL, ?1, 'model', datetime('now'), datetime('now'))",
+            rusqlite::params![name],
+        )?;
+        let node_id = conn.last_insert_rowid();
+
+        // 2. Place it on the parent map.
+        conn.execute(
+            "INSERT INTO layout (node_id, map_id, x, y, width, height) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![node_id, map_id, x, y, width, height],
+        )?;
+        let layout_id = conn.last_insert_rowid();
+
+        // 3. Create the backing map, linked to the new node.
+        conn.execute(
+            "INSERT INTO maps (name, node_id, created_at, updated_at) \
+             VALUES (?1, ?2, datetime('now'), datetime('now'))",
+            rusqlite::params![name, node_id],
+        )?;
+        let new_map_id = conn.last_insert_rowid();
+
+        Ok(CreateModelResult {
+            node_id,
+            layout_id,
+            map_id: new_map_id,
+            name,
+        })
+    })();
+
+    match result {
+        Ok(data) => {
+            conn.execute("COMMIT", [])
+                .map_err(|e| sql_err("COMMIT create_model_card", e))?;
+            Ok(data)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(sql_err("create_model_card transaction", e))
+        }
+    }
+}
+
+/// Return the map_id for the backing map of a model card.
+///
+/// SQL: `SELECT id FROM maps WHERE node_id = ?1`
+///
+/// Matches: `DbInterface.getModelMapId(nodeId)`
+#[tauri::command]
+pub fn get_model_map_id(
+    state: tauri::State<'_, Mutex<Connection>>,
+    node_id: i64,
+) -> Result<i64, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    conn.query_row(
+        "SELECT id FROM maps WHERE node_id = ?1",
+        rusqlite::params![node_id],
+        |row| row.get(0),
+    )
+    .map_err(|e| {
+        if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+            format!("No backing map found for node {}", node_id)
+        } else {
+            sql_err("get_model_map_id", e)
+        }
+    })
+}
+
+/// Return the breadcrumb path from Home down to (and including) the given map.
+///
+/// Walks upward from `map_id` by following each map's backing node to the map
+/// it is placed on, until it reaches the Home map (node_id IS NULL). The path
+/// is reversed before returning so Home is always first.
+///
+/// Matches: `DbInterface.getBreadcrumbPath(mapId)`
+#[tauri::command]
+pub fn get_breadcrumb_path(
+    state: tauri::State<'_, Mutex<Connection>>,
+    map_id: i64,
+) -> Result<Vec<BreadcrumbItem>, String> {
+    let conn = state.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    let mut path: Vec<BreadcrumbItem> = Vec::new();
+    let mut current_map_id = map_id;
+
+    // Guard against degenerate cycles: the depth of any real map hierarchy
+    // is bounded by the number of maps in the database, but 100 is a safe
+    // practical ceiling that prevents an infinite loop if the data is corrupt.
+    let mut iterations = 0usize;
+    loop {
+        iterations += 1;
+        if iterations > 100 {
+            return Err("Breadcrumb path exceeded maximum depth (possible cycle in map hierarchy)".to_string());
+        }
+
+        // Fetch the current map row.
+        // Fetch the map row. We need node_id to determine if this is the Home
+        // map and to look up the node's content for the display name.
+        let current_node_id: Option<i64> = conn
+            .query_row(
+                "SELECT node_id FROM maps WHERE id = ?1",
+                rusqlite::params![current_map_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                    format!("Map {} not found", current_map_id)
+                } else {
+                    sql_err("get_breadcrumb_path fetch map", e)
+                }
+            })?;
+
+        // Determine display name:
+        //   - Home map (node_id IS NULL): always show "Home"
+        //   - Model map (node_id IS NOT NULL): use the node's content as the
+        //     display name so renames are reflected immediately. Fall back to
+        //     the map name if the node row is somehow missing.
+        let display_name = match current_node_id {
+            None => "Home".to_string(),
+            Some(nid) => {
+                conn.query_row(
+                    "SELECT content FROM nodes WHERE id = ?1",
+                    rusqlite::params![nid],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap_or_else(|_| {
+                    // Fallback: read the map name
+                    conn.query_row(
+                        "SELECT name FROM maps WHERE id = ?1",
+                        rusqlite::params![current_map_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap_or_default()
+                })
+            }
+        };
+
+        path.push(BreadcrumbItem {
+            map_id: current_map_id,
+            name: display_name,
+        });
+
+        match current_node_id {
+            // Home map reached -- stop.
+            None => break,
+
+            // Walk up: find which map this node's layout row lives on.
+            Some(nid) => {
+                let parent_map_id: i64 = conn
+                    .query_row(
+                        "SELECT map_id FROM layout WHERE node_id = ?1 LIMIT 1",
+                        rusqlite::params![nid],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| {
+                        if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                            format!("No layout row found for node {} while building breadcrumb", nid)
+                        } else {
+                            sql_err("get_breadcrumb_path layout lookup", e)
+                        }
+                    })?;
+
+                current_map_id = parent_map_id;
+            }
+        }
+    }
+
+    // Path was built bottom-up; reverse so Home is first.
+    path.reverse();
+
+    Ok(path)
 }
