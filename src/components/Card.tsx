@@ -283,7 +283,7 @@ export const Card: React.FC<CardProps> = React.memo(({
           : isSelected
           ? '0 2px 8px rgba(25,118,210,0.3)'
           : '0 1px 3px rgba(0,0,0,0.1)',
-        cursor: isEditing ? 'default' : isInResizeZone ? 'se-resize' : 'grab',
+        cursor: isConnecting ? 'crosshair' : isEditing ? 'default' : isInResizeZone ? 'se-resize' : 'grab',
         userSelect: 'none',
         transition: isDragging ? 'none' : 'box-shadow 0.15s ease',
         opacity: isDragging ? 0.85 : 1,
@@ -314,7 +314,7 @@ export const Card: React.FC<CardProps> = React.memo(({
           alignItems: 'center',
           gap: 6,
           borderBottom: '1px solid rgba(0,0,0,0.12)',
-          cursor: isEditing ? 'text' : 'grab',
+          cursor: isConnecting ? 'crosshair' : isEditing ? 'text' : 'grab',
           overflow: 'hidden',
         }}
         onMouseDown={isEditing ? undefined : handleMouseDown}

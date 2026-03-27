@@ -1,7 +1,12 @@
 # New issues (these should be moved to handled when taken care of)
 
-- Revised "New relationship" handling. When the user presses "r" or "l" (for 'relationship' or 'line' respectively), the cursor should turn into the crosshair now used when clicking on an anchor point. Mouse-down should now create a source on the card under the cursor, and Mouse-up should create a destination on the card under the cursor. This is exactly what happens when you click an anchor-point today. So in other words, pressing "r" or "l", and then pressing the mouse button down, should behave identically to pressing the mouse button down on an anchor point. The same logic should be reused.
+- We need some sort of reference architecture that all members should internalize. For example, "extraction over duplication" and so on. Kael can help us write this out.
+- Small bug with double-click on leaf card to set default size. If the card is smaller than default so it expands, it doesn't trigger push-mode, which might lead it to overlap neighboring cards.
+- I want to streamline the process of working with these files (requirements). First off I think we should call them "Tasks" instead of requirements. So this file should be named "Tasks M4" for example. We should have two headings, "New tasks" and "Resolved tasks". Then instead of the "Requirements testing" section, let's indent the test cases below each "task". Also, lets give all tasks id:s for easy reference.
 # Handled issues (either solved in code or updated in documentation)
+
+- Revised "New relationship" handling: pressing "r" or "l" activates connecting mode (crosshair cursor everywhere). Mouse-down on a card starts the connection from that card, mouse-up on another card completes it. Same logic as anchor-point click-drag, fully reused.
+  - **Fixed:** Added `connectingMode` state + "r"/"l" key handler. Extracted `findCardAtPoint` helper from inline hit-test (shared by mouseup target detection and mousedown source detection). `onMouseDownCapture` intercepts click to call `handleConnectStart`. Crosshair cursor propagated to Card.tsx via `isConnecting` prop. Escape cancels.
 
 - Revised "New card" handling: pressing "c" creates a card attached to the mouse pointer that follows the cursor (like a drag). Click to drop, reusing the exact same drag/drop/push/nest logic. Escape cancels. Title enters edit mode after drop.
   - **Fixed:** Extracted `performDrop` from mouseup into a shared callback. "c" key handler creates card in DB, sets `dragState` with `offsetX/offsetY: 0`, and sets `placementCardIdRef`. `onMouseDownCapture` intercepts the click to trigger `performDrop` + `setNewCardId`. Escape deletes the card from state and DB.
@@ -98,3 +103,14 @@
 45. Press "c", hover over parent with children, click → drop-push resolves overlaps - OK!
 46. Double-click on canvas → still creates card instantly (no placement drag) - OK!
 47. Normal drag/drop → no regression from placement mode changes - OK!
+48. Press "r" → cursor turns to crosshair - OK!
+	1. Only when over the canvas. When over cards, the hand cursor still shows.
+	2. All ok now!
+49. Click on a card → dashed line starts from card center, follows cursor - OK!
+50. Release on another card → relationship created, label editor opens - OK!
+51. Release on empty canvas → connection cancelled - OK!
+52. Press "l" → same behavior as "r" - OK!
+53. Press "r" then Escape → mode cancelled, cursor returns to normal - OK!
+54. Press "r" then click on empty canvas (no card) → mode cancelled - OK!
+55. Existing anchor-point click-drag still works as before - OK!
+56. No regression on card drag, placement mode, or other interactions - OK!

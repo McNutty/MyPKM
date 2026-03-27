@@ -88,6 +88,40 @@ function computeRelMidpoint(
   }
 }
 
+/**
+ * Finds the smallest-area card whose absolute bounds contain the given canvas
+ * point. Returns its ID, or null if no card contains the point.
+ *
+ * Optionally excludes a single card ID (e.g. the source card when starting a
+ * connection). The "smallest area" rule picks the most-specific nested card
+ * when multiple cards overlap at the cursor position.
+ */
+function findCardAtPoint(
+  cards: Map<number, CardData>,
+  canvasX: number,
+  canvasY: number,
+  excludeId?: number,
+): number | null {
+  let bestId: number | null = null
+  let bestArea = Infinity
+  for (const [id, candidate] of cards) {
+    if (id === excludeId) continue
+    const absPos = getAbsolutePosition(cards, id)
+    const area = candidate.width * candidate.height
+    if (
+      canvasX >= absPos.x &&
+      canvasX <= absPos.x + candidate.width &&
+      canvasY >= absPos.y &&
+      canvasY <= absPos.y + candidate.height &&
+      area < bestArea
+    ) {
+      bestId = id
+      bestArea = area
+    }
+  }
+  return bestId
+}
+
 // ============================================================================
 // PROPS
 // ============================================================================
@@ -136,6 +170,9 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   // Current mouse position in canvas coordinates, tracked during connection draw
   const [connectingMousePos, setConnectingMousePos] = useState<{ x: number; y: number } | null>(null)
   const [editingRelId, setEditingRelId] = useState<number | null>(null)
+  // Keyboard-initiated connecting mode ("r"/"l" keys): cursor becomes crosshair,
+  // the next mousedown picks the source card and hands off to handleConnectStart.
+  const [connectingMode, setConnectingMode] = useState(false)
 
   // M3: Re-attach gesture -- dragging an endpoint handle to rewire a relationship
   const [reattachState, setReattachState] = useState<ReattachState | null>(null)
@@ -1474,25 +1511,8 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
 
       if (!mousePos) return
 
-      // Find the topmost card under the current mouse position (canvas coords),
-      // excluding the source card itself.
-      let targetId: number | null = null
-      let bestArea = Infinity
-      for (const [id, candidate] of cardsRef.current) {
-        if (id === sourceId) continue
-        const absPos = getAbsolutePosition(cardsRef.current, id)
-        const area = candidate.width * candidate.height
-        if (
-          mousePos.x >= absPos.x &&
-          mousePos.x <= absPos.x + candidate.width &&
-          mousePos.y >= absPos.y &&
-          mousePos.y <= absPos.y + candidate.height &&
-          area < bestArea
-        ) {
-          targetId = id
-          bestArea = area
-        }
-      }
+      // Find the topmost card under the release position, excluding the source card.
+      const targetId = findCardAtPoint(cardsRef.current, mousePos.x, mousePos.y, sourceId)
 
       if (targetId === null) return // Released on empty canvas -- cancel
 
@@ -2085,6 +2105,26 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
         return
       }
 
+      // --- Escape: cancel keyboard connecting mode ---
+      if (e.key === 'Escape') {
+        setConnectingMode(false)
+        return
+      }
+
+      // --- "r" / "l": enter keyboard-initiated connecting mode ---
+      // The next mousedown will pick the source card and hand off to handleConnectStart.
+      if (e.key === 'r' || e.key === 'R' || e.key === 'l' || e.key === 'L') {
+        // Don't fire when typing inside a text field or contenteditable
+        const active = document.activeElement
+        if (
+          active instanceof HTMLInputElement ||
+          active instanceof HTMLTextAreaElement ||
+          (active instanceof HTMLElement && active.isContentEditable)
+        ) return
+        setConnectingMode(true)
+        return
+      }
+
       if (e.key !== 'c' && e.key !== 'C') return
       // Don't fire when typing inside a text field or contenteditable
       const active = document.activeElement
@@ -2326,7 +2366,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
           flex: 1,
           overflow: 'hidden',
           backgroundColor: '#f5f5f5',
-          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : (reattachState || connectingState) ? 'crosshair' : spaceHeld ? 'grab' : 'default',
+          cursor: isPanning ? 'grabbing' : (dragState || draggingRelCardId !== null) ? 'grabbing' : (connectingMode || reattachState || connectingState) ? 'crosshair' : spaceHeld ? 'grab' : 'default',
           position: 'relative',
         }}
         onWheel={handleWheel}
@@ -2348,6 +2388,24 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               performDropRef.current?.(ds, startSnapshot).then(() => {
                 setNewCardId(id)
               })
+            }
+            return
+          }
+          // --- KEYBOARD CONNECTING MODE INTERCEPT (capture phase) ---
+          // When the user pressed "r"/"l", the cursor turns crosshair and the next
+          // left-click picks the source card. We intercept here (capture phase) so
+          // card-level stopPropagation() doesn't swallow the click.
+          if (e.button === 0 && connectingMode) {
+            e.stopPropagation()
+            setConnectingMode(false)
+            const rect = canvasRef.current?.getBoundingClientRect()
+            if (rect) {
+              const canvasX = (e.clientX - rect.left - viewport.panX) / viewport.zoom
+              const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
+              const cardId = findCardAtPoint(cardsRef.current, canvasX, canvasY)
+              if (cardId !== null) {
+                handleConnectStart(cardId, e)
+              }
             }
             return
           }
@@ -2478,7 +2536,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
                 onWidthChange={handleWidthChange}
                 zoom={viewport.zoom}
                 onConnectStart={handleConnectStart}
-                isConnecting={connectingState !== null}
+                isConnecting={connectingState !== null || connectingMode}
                 isHovered={hoveredCardId === card.id}
                 hoveredCardId={hoveredCardId}
               />
@@ -2528,7 +2586,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
               userSelect: 'none',
             }}
           >
-            Space: Pan&nbsp;&nbsp;·&nbsp;&nbsp;C: New card&nbsp;&nbsp;·&nbsp;&nbsp;Double-click: New card
+            Space: Pan&nbsp;&nbsp;·&nbsp;&nbsp;C: New card&nbsp;&nbsp;·&nbsp;&nbsp;R: Relationship&nbsp;&nbsp;·&nbsp;&nbsp;Double-click: New card
           </div>
         )}
 
