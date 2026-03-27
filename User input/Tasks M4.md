@@ -6,7 +6,11 @@ We need some sort of reference architecture that all team members should interna
 **T4-20: Double-click leaf size bug**
 Small bug with double-click on leaf card to set default size. If the card is smaller than default so it expands, it doesn't trigger push-mode, which might lead it to overlap neighboring cards.
 
+**T4-21: Add "Milestone Scope" section to task files**
 Add a section at the top of the task-files called "Milestone Scope", where the scope from the kickoff is restated. This will make it easier for me to add tasks that fit the scope, right now I must admit I just add them as I think of them, the scope is not top of mind for me.
+
+**T4-22: Rework padding to be proportional to nesting level**
+Rework padding. I feel that padding should somehow be proportional to the "level". My reasoning is that when working with deeply nested structures, you often tend to zoom out. And the further zoomed out you are, the smaller the current padding seems. So if we could find some nice algorithm for this, I think it would make working at different zoom levels look better. I want to discuss this a bit before though, it is not fully thought through.
 
 # Resolved tasks
 

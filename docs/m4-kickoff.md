@@ -392,7 +392,7 @@ Q22 and Q23 resolved by user (2026-03-25). The app uses a three-panel layout: le
 - `docs/architecture-review-2026-03-25.md` -- Kael's architecture review (source of all Pre-work items)
 - `docs/roadmap.md` -- Living roadmap; this milestone moves the project from "functional tool" to "usable tool"
 - `User input/Vision.md` -- User's forward-looking feature vision (source of all four M4 features)
-- `User input/User requirements M3.md` -- M3 issue tracker (closed M3 items and carry-forwards into M4)
+- `User input/Tasks M3.md` -- M3 task tracker (closed M3 items and carry-forwards into M4)
 
 ---
 

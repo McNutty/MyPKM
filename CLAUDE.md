@@ -47,13 +47,17 @@ See `team/roster.md` for the full roster.
 3. Spawn them using the Agent tool with their system prompt + the specific task
 4. Collect their output and place results in the appropriate project folder
 
+## Task Tracking
+
+Task files live at `User input/Tasks M<N>.md`. Each task has an ID (e.g., `T4-01`) with test cases indented below it. The user adds new tasks as plain paragraphs — **Larry is responsible for assigning the next available ID and formatting them** (bold ID + title, description below).
+
 ## After Every Confirmed Fix
 
-1. **Add test cases** to the requirements testing section (`User input/User requirements M<N>.md`) BEFORE the user tests. This gives them a checklist to comment on.
+1. **Add test cases** indented under the task in `User input/Tasks M<N>.md` BEFORE the user tests. This gives them a checklist to comment on.
 2. **Wait for user confirmation** that tests pass.
 3. **Commit** code changes immediately. Never let working changes accumulate uncommitted.
 4. **Push** to GitHub remote. Every commit gets pushed.
-5. **Update the issue tracker** in the same requirements file. Move resolved issues from "New issues" to "Handled issues" with a brief note on how they were fixed.
+5. **Update the task tracker** in the same file. Move resolved tasks from "New tasks" to "Resolved tasks" with a brief note on how they were fixed.
 
 ## Session Continuity
 
@@ -62,7 +66,7 @@ When starting a new session, orient yourself using these resources:
 1. **This file (CLAUDE.md)** — Delegation rules, team roster, workflow (commit + update thoughts after each fix)
 2. **Memory files** (`~/.claude/projects/.../memory/`) — Project status, user preferences, all feedback. Check `MEMORY.md` index first.
 3. **Git log** (`git log --oneline -20`) — Clean commit trail with descriptive messages showing recent work
-4. **`User input/User requirements M<N>.md`** — Live issue tracker for the current milestone. Check for new issues first, delegate fixes, update after confirmation.
+4. **`User input/Tasks M<N>.md`** — Live task tracker for the current milestone. Each task has an ID (T4-01, etc.) with test cases indented below. Check for new tasks first, delegate fixes, update after confirmation.
 5. **`docs/m<N>-kickoff.md`** — Authoritative spec for the current milestone. Supporting docs (Derek's DSRP analysis, Maren's drafts) are in the same folder.
 
 ## About the Team
