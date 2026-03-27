@@ -1,4 +1,4 @@
-# Plectica 2.0 — DSRP-Native Schema
+# Ambit — DSRP-Native Schema
 
 **File:** `data/dsrp_schema.sql` (source of truth)
 **Database:** `data/pkm.db` (gitignored)
@@ -12,7 +12,7 @@
 
 ## Overview
 
-This is the DSRP-native database schema for Plectica 2.0. Every design decision is grounded in DSRP theory. The schema implements Phase 1: Distinctions (nodes) and Systems (part-whole hierarchy via `parent_id`). Relationships (R) and Perspectives (P) are deferred — see Section 7 of the spec for details.
+This is the DSRP-native database schema for Ambit. Every design decision is grounded in DSRP theory. The schema implements Phase 1: Distinctions (nodes) and Systems (part-whole hierarchy via `parent_id`). Relationships (R) and Perspectives (P) are deferred — see Section 7 of the spec for details.
 
 The full annotated DDL, with inline DSRP rationale, lives in `data/dsrp_schema.sql`. This document summarizes each table, documents all constraints, and provides the key query patterns for application developers.
 

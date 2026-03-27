@@ -1,4 +1,4 @@
-# DSRP Review: Plectica 2.0 Roadmap
+# DSRP Review: Ambit Roadmap
 
 **Reviewer:** Derek, DSRP & Systems Thinking Expert
 **Date:** 2026-03-23
@@ -69,7 +69,7 @@ In MVP, a node has exactly one parent (or none). It cannot be in two Systems at 
 
 **Missing Non-Negotiable 9: The canvas is the map, and the map is a first-class entity.**
 
-A "map" in Plectica is not just a file or a container. It is the System at the top level -- the outermost context that gives meaning to everything inside it. The data model must represent maps as first-class entities, not as implicit files or session states. This directly answers Q3 in the roadmap (addressed further below).
+A "map" in Ambit is not just a file or a container. It is the System at the top level -- the outermost context that gives meaning to everything inside it. The data model must represent maps as first-class entities, not as implicit files or session states. This directly answers Q3 in the roadmap (addressed further below).
 
 ---
 
@@ -156,7 +156,7 @@ These are not in the roadmap as written, but they are the common failure modes I
 
 The biggest recurring mistake: giving nodes a type (`note`, `concept`, `system`, `container`) that controls what they can do. In DSRP, every node is a Distinction, every Distinction is potentially a System, and no Distinction is more "systemic" than another by nature. The software must not create a caste system among nodes.
 
-This is directly relevant to the existing PKM schema, which has a `notes.kind` column with values like `moc`, `note`, `idea`. That typing is fine for the PKM product. It has no place in the Plectica schema.
+This is directly relevant to the existing PKM schema, which has a `notes.kind` column with values like `moc`, `note`, `idea`. That typing is fine for the PKM product. It has no place in the Ambit schema.
 
 ### Violation 2: Treating "no children" as a fundamentally different state from "has children"
 
@@ -295,7 +295,7 @@ A node's identity (what it is, its Distinction) is separate from its position in
 
 ### 5. The map is not the territory
 
-The Plectica map is a model of someone's thinking. It is not the truth. Users need to be able to rearrange, rename, and restructure freely without the software imposing semantic penalties. The software should never say "you can't do that" except for structural impossibilities (cycles). Every other constraint should be a default that users can override. Ease of restructuring is not just a UX nicety -- it is a DSRP requirement, because thinking is iterative and systems boundaries are always provisional.
+The Ambit map is a model of someone's thinking. It is not the truth. Users need to be able to rearrange, rename, and restructure freely without the software imposing semantic penalties. The software should never say "you can't do that" except for structural impossibilities (cycles). Every other constraint should be a default that users can override. Ease of restructuring is not just a UX nicety -- it is a DSRP requirement, because thinking is iterative and systems boundaries are always provisional.
 
 ---
 
@@ -311,9 +311,9 @@ Maren rates this MEDIUM priority. I want to raise it slightly. The interaction d
 
 ### On the Current PKM Schema
 
-Maren's assessment (Section 11) is accurate and correct. The PKM schema is a solid piece of work. The `links` table is a reasonable starting point for thinking about Relationships but needs rethinking for DSRP semantics (action/reaction, not just typed edges). The `collections` pattern (self-referential adjacency list with parent_id) is structurally what we want for nodes. The right call is a clean break for the Plectica schema, with Silas designing it fresh.
+Maren's assessment (Section 11) is accurate and correct. The PKM schema is a solid piece of work. The `links` table is a reasonable starting point for thinking about Relationships but needs rethinking for DSRP semantics (action/reaction, not just typed edges). The `collections` pattern (self-referential adjacency list with parent_id) is structurally what we want for nodes. The right call is a clean break for the Ambit schema, with Silas designing it fresh.
 
-One thing to preserve from the PKM schema philosophy: Silas's `metadata TEXT` (JSON) column on core tables. This is good practice and should carry into the Plectica schema. It saved us from schema migrations before and will again.
+One thing to preserve from the PKM schema philosophy: Silas's `metadata TEXT` (JSON) column on core tables. This is good practice and should carry into the Ambit schema. It saved us from schema migrations before and will again.
 
 ### On Tauri vs. Electron
 

@@ -1,4 +1,4 @@
-# Plectica 2.0 -- M3 Kickoff: Relationships + Polish
+# Ambit -- M3 Kickoff: Relationships + Polish
 
 **Author:** Maren (Technical Project Manager), with DSRP theory input from Derek
 **Date:** 2026-03-24
@@ -12,7 +12,7 @@
 
 This document supersedes the previous M3 kickoff, which scoped M3 as zoom-into-card navigation (Perspective). Derek revised his sequencing recommendation: Relationships (R) should ship before Perspectives (P). The original M3 doc described Relationships as a Phase 2 feature deferred to M4. That sequencing is now reversed.
 
-**Why Derek changed the recommendation:** Without Relationships, Plectica is a hierarchical note-taker -- Systems without connections across system boundaries. R is what makes it a systems thinking tool. Zoom-into-card (Perspectives) is a navigation affordance that builds on an already-functional DSRP canvas; Relationships are structural. Building P before R would be building a navigation feature on top of an incomplete representation.
+**Why Derek changed the recommendation:** Without Relationships, Ambit is a hierarchical note-taker -- Systems without connections across system boundaries. R is what makes it a systems thinking tool. Zoom-into-card (Perspectives) is a navigation affordance that builds on an already-functional DSRP canvas; Relationships are structural. Building P before R would be building a navigation feature on top of an incomplete representation.
 
 **Carry-forward items are rebalanced:** CF-2 (delete dialog) and CF-4 (code cleanup) remain in M3 scope. CF-1 (zoom-into-card) moves to M4. CF-3 (conditional header border) is deferred -- it is cosmetically minor and zoom-into-card is no longer in scope to bundle it with.
 
@@ -22,7 +22,7 @@ This document supersedes the previous M3 kickoff, which scoped M3 as zoom-into-c
 
 M3 adds Relationships (R) to the canvas and closes two carry-forward items from M2.
 
-M2 delivered Distinctions (cards) and Systems (nesting). The user can build a hierarchy. What M3 adds is the ability to draw connections across that hierarchy -- to say "this part of this system acts on that part of that system." That is the core move of systems thinking, and it is what separates Plectica from a nested outline.
+M2 delivered Distinctions (cards) and Systems (nesting). The user can build a hierarchy. What M3 adds is the ability to draw connections across that hierarchy -- to say "this part of this system acts on that part of that system." That is the core move of systems thinking, and it is what separates Ambit from a nested outline.
 
 By the end of M3:
 - A user can hover near any card edge, see a connection handle appear, and drag from that handle to any other card to create a directed relationship.

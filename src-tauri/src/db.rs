@@ -58,11 +58,11 @@ CREATE INDEX IF NOT EXISTS idx_rel_source ON relationships(source_id);
 CREATE INDEX IF NOT EXISTS idx_rel_target ON relationships(target_id);
 ";
 
-/// Open (or create) the SQLite database for Plectica in the app data directory.
+/// Open (or create) the SQLite database for Ambit in the app data directory.
 ///
 /// Steps performed on every open:
 ///   1. Resolve the app data directory via Tauri's path API.
-///   2. Open / create `plectica.db` there.
+///   2. Open / create `ambit.db` there.
 ///   3. Apply connection-level PRAGMAs (foreign keys, WAL mode).
 ///   4. Run schema DDL (idempotent: all statements use IF NOT EXISTS).
 ///   5. Seed the default map if no maps exist.
@@ -78,7 +78,7 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
     std::fs::create_dir_all(&app_data_dir)
         .expect("Could not create app data directory");
 
-    let db_path = app_data_dir.join("plectica.db");
+    let db_path = app_data_dir.join("ambit.db");
 
     eprintln!("[db] Opening database at: {}", db_path.display());
 

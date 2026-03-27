@@ -11,7 +11,7 @@ pub fn run() {
             // Initialize the SQLite database and store the connection in
             // Tauri managed state so all IPC commands can access it.
             let conn = db::init_db(app.handle())
-                .expect("Failed to initialize Plectica database");
+                .expect("Failed to initialize Ambit database");
 
             app.manage(Mutex::new(conn));
 
@@ -38,5 +38,5 @@ pub fn run() {
             commands::delete_map,
         ])
         .run(tauri::generate_context!())
-        .expect("Error while running Plectica");
+        .expect("Error while running Ambit");
 }

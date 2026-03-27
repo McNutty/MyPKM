@@ -8,7 +8,7 @@
 
 ## 1. What Was Tested
 
-Two approaches were prototyped to evaluate fitness for Plectica 2.0's core mechanic: recursively nested boxes with auto-resize. Both prototypes implement the same scenario (the "Bicycle" system from Maren's user story) with 5 nesting levels and ~50 elements.
+Two approaches were prototyped to evaluate fitness for Ambit's core mechanic: recursively nested boxes with auto-resize. Both prototypes implement the same scenario (the "Bicycle" system from Maren's user story) with 5 nesting levels and ~50 elements.
 
 ### Approach 1: tldraw
 
@@ -69,7 +69,7 @@ React Flow was the original alternative candidate (per Maren's roadmap). I chose
 | **tldraw** | PARTIAL | tldraw does not have a concept of "unnesting" by dragging outside a frame boundary. Frames clip their children. To unnest, you would need to: (1) detect that the shape is being dragged outside its parent frame's bounds, (2) reparent it to the frame's parent (or the page), (3) convert coordinates. This is entirely custom logic that conflicts with tldraw's frame clipping behavior. |
 | **Custom React** | YES | When a dragged card's center crosses its parent's boundary, we detect the unnest condition on mouse-up. The card is reparented to the grandparent (or to the canvas root). Coordinates are converted automatically. Auto-resize contracts the old parent. |
 
-**Verdict:** Unnesting is a critical Plectica interaction (drag-to-unnest = removing a part from a system). tldraw's frame clipping model makes this unnatural. The custom approach implements it as a direct consequence of the drag model.
+**Verdict:** Unnesting is a critical Ambit interaction (drag-to-unnest = removing a part from a system). tldraw's frame clipping model makes this unnatural. The custom approach implements it as a direct consequence of the drag model.
 
 ### 2.5 Pan and Zoom on Infinite Canvas?
 
@@ -93,10 +93,10 @@ React Flow was the original alternative candidate (per Maren's roadmap). I chose
 
 | Approach | Difficulty | Framework friction |
 |---|---|---|
-| **tldraw** | MODERATE | HIGH. tldraw's shape/frame model is designed for flat whiteboards with optional one-level grouping. Every core Plectica requirement (auto-resize, deep nesting, drag-to-unnest) requires overriding or extending tldraw's built-in behavior. We are not using tldraw to build Plectica -- we are *un-building* parts of tldraw so we can rebuild them differently. The tldraw SDK is well-designed and extensible, but extensibility for our use case means replacing core interaction handlers, not just adding shapes. |
+| **tldraw** | MODERATE | HIGH. tldraw's shape/frame model is designed for flat whiteboards with optional one-level grouping. Every core Ambit requirement (auto-resize, deep nesting, drag-to-unnest) requires overriding or extending tldraw's built-in behavior. We are not using tldraw to build Ambit -- we are *un-building* parts of tldraw so we can rebuild them differently. The tldraw SDK is well-designed and extensible, but extensibility for our use case means replacing core interaction handlers, not just adding shapes. |
 | **Custom React** | MODERATE | NONE (by definition). Every behavior is written from scratch, which means more code but zero surprises. The DOM nesting model maps directly to our data model. The implementation is ~400 lines of TypeScript for the core engine (store.ts) + ~250 lines for the card renderer + ~300 lines for the app shell with interactions. This is not trivial, but it is all *our* code that directly expresses *our* requirements. |
 
-**Verdict:** The custom approach requires writing more code, but every line serves Plectica's specific needs. tldraw requires writing custom code AND understanding + working around the framework's existing behavior. Net implementation effort is comparable, but the custom approach produces code that is easier to reason about and modify.
+**Verdict:** The custom approach requires writing more code, but every line serves Ambit's specific needs. tldraw requires writing custom code AND understanding + working around the framework's existing behavior. Net implementation effort is comparable, but the custom approach produces code that is easier to reason about and modify.
 
 ---
 
@@ -124,11 +124,11 @@ React Flow was the original alternative candidate (per Maren's roadmap). I chose
 
 2. **We are building something that does not exist.** Recursive nested containers with auto-resize, drag-to-nest, and drag-to-unnest is not a standard whiteboard feature. No existing framework implements it. With tldraw, we would spend significant effort disabling its assumptions before we could build ours. With the custom approach, we build exactly what we need.
 
-3. **Total control over the rendering and interaction model.** Plectica's nesting interaction needs to feel magical -- the "blue highlight, gentle expand, card snaps into place" experience. This requires fine-grained control over every visual detail. The custom approach gives us this. tldraw gives us their visual language, which we would need to override.
+3. **Total control over the rendering and interaction model.** Ambit's nesting interaction needs to feel magical -- the "blue highlight, gentle expand, card snaps into place" experience. This requires fine-grained control over every visual detail. The custom approach gives us this. tldraw gives us their visual language, which we would need to override.
 
 4. **Text editing is trivial in DOM.** A huge advantage of the DOM-based approach: card text editing is just `<input>` or `<textarea>` elements. In tldraw, text editing inside custom shapes requires complex overlay management.
 
-5. **tldraw's strengths are not our needs.** tldraw excels at freehand drawing, shape tools, collaborative editing, and one-level grouping. Plectica needs none of these at MVP. tldraw's overhead (bundle size, API surface, conceptual model) buys us nothing we need.
+5. **tldraw's strengths are not our needs.** tldraw excels at freehand drawing, shape tools, collaborative editing, and one-level grouping. Ambit needs none of these at MVP. tldraw's overhead (bundle size, API surface, conceptual model) buys us nothing we need.
 
 6. **The custom approach is not as much work as it sounds.** The prototype is ~950 lines of TypeScript. The core engine (auto-resize, coordinate transforms, nesting logic) is ~400 lines. For a production implementation, we are looking at perhaps 2,000-3,000 lines for the full canvas engine, plus whatever UI polish we add. This is a manageable codebase that the team fully understands.
 
@@ -151,7 +151,7 @@ Even though we are not using tldraw as a dependency, we should study and adopt s
 
 1. **SQLite access is cleaner in Tauri.** Tauri's Rust backend can use `rusqlite` (or the `tauri-plugin-sql` plugin) to access SQLite directly, with no Node.js wrapper layer. In Electron, we would use `better-sqlite3` through Node.js, which works but adds a layer. For a local-first app where the database is the source of truth, the shorter path to SQLite matters.
 
-2. **Memory footprint matters for a thinking tool.** Plectica will be open for hours during deep thinking sessions. Tauri's ~30-40MB baseline vs Electron's ~200-300MB means the app does not fight the user's other tools for memory. For a tool that should "disappear so the user can think spatially," being lightweight is an experience requirement, not just a technical one.
+2. **Memory footprint matters for a thinking tool.** Ambit will be open for hours during deep thinking sessions. Tauri's ~30-40MB baseline vs Electron's ~200-300MB means the app does not fight the user's other tools for memory. For a tool that should "disappear so the user can think spatially," being lightweight is an experience requirement, not just a technical one.
 
 3. **Bundle size.** Tauri apps distribute at <10MB. Electron apps start at ~150MB. For a local-first tool that we want people to install without friction, smaller is better.
 
@@ -212,6 +212,6 @@ Waiting on:
 
 ---
 
-*The framework that makes nesting feel invisible is the right framework. For Plectica, that means building our own.*
+*The framework that makes nesting feel invisible is the right framework. For Ambit, that means building our own.*
 
 -- Wren

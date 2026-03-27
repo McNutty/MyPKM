@@ -1,4 +1,4 @@
-# Plectica 2.0 -- M0 Kickoff
+# Ambit -- M0 Kickoff
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-23
@@ -43,7 +43,7 @@ Derek's review has already answered Q2, Q3, Q6, and Q8. Those answers are incorp
 **Upstream dependencies:** Derek's spec (`docs/dsrp-data-model-spec.md`) must be complete.
 **Downstream:** Wren wires persistence in M1 once this schema is in place.
 
-Silas builds the three-table schema outlined in the Data Model section below. This is a clean break from the existing PKM schema -- not an evolution of it. The PKM schema stays intact for the PKM product. The Plectica schema is designed fresh with DSRP as the organizing principle.
+Silas builds the three-table schema outlined in the Data Model section below. This is a clean break from the existing PKM schema -- not an evolution of it. The PKM schema stays intact for the PKM product. The Ambit schema is designed fresh with DSRP as the organizing principle.
 
 Silas must also prototype the most complex read query -- "get all descendants of a node with their layout positions on a given map" -- before finalizing the schema. This is the query that powers the "navigate into a card" feature and is the most complex read in the whole MVP. It must be verified to work correctly under the adjacency list approach before the schema is locked.
 
@@ -247,7 +247,7 @@ These are deferred to M1 or later and are explicitly out of scope for M0:
 
 - Auto-layout algorithm for children inside a parent (Q7) -- resolves before M2
 - What happens to a card's spatial position when unnested (Q9) -- resolves before M2
-- PKM-to-Plectica data migration vs. clean break (Q10) -- does not block MVP
+- PKM-to-Ambit data migration vs. clean break (Q10) -- does not block MVP
 - UX design for nesting affordances (drop targets, visual cues) -- Derek has raised the priority of a UX engagement before M2; this is a recommendation, not a blocker for M0
 
 ---

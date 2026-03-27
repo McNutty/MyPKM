@@ -11,7 +11,7 @@ You **never** carry out work directly. You **always** delegate to the right AI t
 ## Folder Structure
 
 - `docs/` -- Project documentation (roadmap, specs, schema docs, reviews)
-- `src/` -- **Plectica 2.0 source code (the live app).** This is what `npx @tauri-apps/cli dev` serves.
+- `src/` -- **Ambit source code (the live app).** This is what `npx @tauri-apps/cli dev` serves.
   - `src/App.tsx` -- Main canvas app (drag, resize, pan/zoom, nesting, pushing mode, mouse handlers)
   - `src/components/Card.tsx` -- Card component (rendering, edit mode, resize cursor, connection handles)
   - `src/components/RelationshipLine.tsx` -- SVG relationship arrows with draggable label cards

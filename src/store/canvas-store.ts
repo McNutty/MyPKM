@@ -1,5 +1,5 @@
 /**
- * Canvas state utilities for Plectica 2.0.
+ * Canvas state utilities for Ambit.
  *
  * Pure utility functions only -- no React state, no side effects.
  * All functions accept and return immutable-style Map<number, CardData>.

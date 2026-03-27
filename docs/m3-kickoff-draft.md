@@ -1,4 +1,4 @@
-# Plectica 2.0 -- M3 Kickoff: Perspective Navigation + Relationships Foundation
+# Ambit -- M3 Kickoff: Perspective Navigation + Relationships Foundation
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-24
@@ -17,7 +17,7 @@ Sections awaiting Derek's input are marked: **[DEREK INPUT NEEDED]**
 
 ## M3 Goal
 
-M3 completes the MVP and makes Plectica 2.0 genuinely usable as a thinking tool.
+M3 completes the MVP and makes Ambit genuinely usable as a thinking tool.
 
 M2 delivered the structural backbone: any card can contain any other card to arbitrary depth, with full persistence and cycle prevention. The user can now model a System. What M3 adds is the ability to work within that system fluidly -- to navigate into a card as its own canvas, to delete a system's parts with deliberate intent rather than accidental keystrokes, and to begin laying the groundwork for Relationships (the R in DSRP).
 

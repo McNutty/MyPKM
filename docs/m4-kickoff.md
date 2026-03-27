@@ -1,4 +1,4 @@
-# Plectica 2.0 -- M4 Kickoff: Real Modeling
+# Ambit -- M4 Kickoff: Real Modeling
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-25

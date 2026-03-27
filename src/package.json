@@ -1,8 +1,8 @@
 {
-  "name": "plectica-canvas",
+  "name": "ambit-canvas",
   "version": "0.1.0",
   "private": true,
-  "description": "Plectica 2.0 -- production canvas app (M1)",
+  "description": "Ambit -- production canvas app (M1)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -1,4 +1,4 @@
-# Plectica 2.0 -- M1 Kickoff: Cards on Canvas
+# Ambit -- M1 Kickoff: Cards on Canvas
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-23
@@ -8,7 +8,7 @@
 
 ## M1 Goal
 
-M1 delivers the first user-touchable version of Plectica 2.0. By the end of M1, a user can open the app, create cards on the infinite canvas, type text into them, drag them to reposition, resize them manually, and delete them. Every action persists immediately to the local SQLite database. Closing and reopening the app returns the user to exactly the state they left. M1 is not the complete product -- nesting is M2 -- but it is the first moment the application feels real. The canvas has weight, actions have consequences, and work is not lost.
+M1 delivers the first user-touchable version of Ambit. By the end of M1, a user can open the app, create cards on the infinite canvas, type text into them, drag them to reposition, resize them manually, and delete them. Every action persists immediately to the local SQLite database. Closing and reopening the app returns the user to exactly the state they left. M1 is not the complete product -- nesting is M2 -- but it is the first moment the application feels real. The canvas has weight, actions have consequences, and work is not lost.
 
 ---
 

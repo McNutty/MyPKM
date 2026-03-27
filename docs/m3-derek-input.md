@@ -18,7 +18,7 @@ In the original Plectica software, perspectives allowed a user to designate any 
 
 ### What This Should Look Like on the Canvas
 
-For Plectica 2.0, there are two registers in which perspective-taking should manifest:
+For Ambit, there are two registers in which perspective-taking should manifest:
 
 **Register 1: Zoom-Into-Card as Navigation (the fractal Systems register)**
 

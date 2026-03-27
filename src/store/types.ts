@@ -1,5 +1,5 @@
 /**
- * Core data types for the Plectica 2.0 canvas app.
+ * Core data types for the Ambit canvas app.
  *
  * Key design: every card has a position relative to its parent's content area.
  * The canvas root is the implicit parent for top-level cards.

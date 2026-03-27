@@ -1,4 +1,4 @@
-# Architecture Review -- Plectica 2.0
+# Architecture Review -- Ambit
 
 **Reviewer:** Kael, Software Architect
 **Date:** 2026-03-25

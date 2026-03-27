@@ -1,4 +1,4 @@
-# Plectica 2.0 -- Project Roadmap
+# Ambit -- Project Roadmap
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-23
@@ -8,7 +8,7 @@
 
 ## 1. Project Vision
 
-Plectica 2.0 is a local-first visual systems thinking application built on the DSRP framework (Distinctions, Systems, Relationships, Perspectives). The primary interface is an infinite canvas/whiteboard where users think visually using "auto-adjusting boxes within boxes" -- nested cards representing DSRP structures.
+Ambit is a local-first visual systems thinking application built on the DSRP framework (Distinctions, Systems, Relationships, Perspectives). The primary interface is an infinite canvas/whiteboard where users think visually using "auto-adjusting boxes within boxes" -- nested cards representing DSRP structures.
 
 This is not a note-taking app with a canvas bolted on. The whiteboard IS the application. DSRP IS the product.
 
@@ -43,7 +43,7 @@ Each phase delivers a usable, testable product. No phase depends on a future pha
 
 ### The User Story
 
-> **A user can open Plectica 2.0, create cards on an infinite canvas, type text into them, and nest cards inside other cards to arbitrary depth. Cards auto-adjust their size to contain their children. The user can drag cards in and out of other cards to restructure their thinking. The map persists locally between sessions.**
+> **A user can open Ambit, create cards on an infinite canvas, type text into them, and nest cards inside other cards to arbitrary depth. Cards auto-adjust their size to contain their children. The user can drag cards in and out of other cards to restructure their thinking. The map persists locally between sessions.**
 
 ### What "Done" Looks Like
 
@@ -209,7 +209,7 @@ Both decisions were resolved during M0. No open decisions remain for M1 or M2.
 
 Wren prototyped two candidates: tldraw and Custom React + CSS Transforms. React Flow was evaluated and rejected early (designed for node-graph DAGs, no concept of spatial containment). Full evaluation in `docs/canvas-framework-evaluation.md`.
 
-**Why Custom React won:** tldraw's frame model does not support auto-resize natively -- frames are fixed-size containers that clip children. Implementing Plectica's truthful boundary requirement (child always visually inside parent; parent auto-expands bidirectionally) required overriding tldraw's core interaction handlers. The custom approach implements auto-resize as a first-class constraint with zero framework friction. Every other criterion (drag-to-nest, drag-to-unnest, deep nesting) also favored the custom approach. tldraw's advantages (built-in pan/zoom, undo/redo) are buildable and were not deciding factors.
+**Why Custom React won:** tldraw's frame model does not support auto-resize natively -- frames are fixed-size containers that clip children. Implementing Ambit's truthful boundary requirement (child always visually inside parent; parent auto-expands bidirectionally) required overriding tldraw's core interaction handlers. The custom approach implements auto-resize as a first-class constraint with zero framework friction. Every other criterion (drag-to-nest, drag-to-unnest, deep nesting) also favored the custom approach. tldraw's advantages (built-in pan/zoom, undo/redo) are buildable and were not deciding factors.
 
 **Working prototype:** `src/prototype/custom-react-canvas/` (~950 lines TypeScript, functional, 5-level nesting demonstrated).
 
@@ -276,7 +276,7 @@ These need answers before or during MVP development.
 | Q1 | What canvas framework best supports recursive nesting? | **Custom React + CSS Transforms.** See `docs/canvas-framework-evaluation.md`. |
 | Q2 | Does the DSRP data model require relationships to be first-class entities at MVP? | **No, but the schema must not foreclose it.** `node_type DEFAULT 'card'` from day one; Phase 2 adds `'relationship'` without migration. No `links` table in Phase 1. Answered by Derek in `docs/dsrp-data-model-spec.md`. |
 | Q3 | Should a map be a special node or a separate entity? | **Separate entity (`maps` table).** Top-level cards have `parent_id = NULL`; they are placed on a map via the `layout` table but not structurally contained by it. Answered by Derek in `docs/dsrp-data-model-spec.md`. |
-| Q4 | What is the current state of the codebase? | Existing POC in `poc/` (Flask/PKM app). Not reused. Plectica 2.0 is greenfield in `src/`. |
+| Q4 | What is the current state of the codebase? | Existing POC in `poc/` (Flask/PKM app). Not reused. Ambit is greenfield in `src/`. |
 | Q5 | Electron or Tauri? | **Tauri v2.x.** See Decision 2 above. |
 
 ### Can Resolve During M1-M2 (Non-Blocking at M0)
@@ -370,13 +370,13 @@ However, it is **not DSRP-native.** Key gaps:
 | Spatial position | Not present | Nodes need x, y, width, height per canvas/map. |
 | Maps/canvases | Not present | Need a concept of "map" as a top-level container. |
 
-**Recommendation:** The new schema should be a clean break, not an evolution of the current one. The current schema can be kept for the PKM use case; the Plectica 2.0 schema is a different data model for a different product. Silas should design it fresh with DSRP as the organizing principle.
+**Recommendation:** The new schema should be a clean break, not an evolution of the current one. The current schema can be kept for the PKM use case; the Ambit schema is a different data model for a different product. Silas should design it fresh with DSRP as the organizing principle.
 
 ---
 
 ## 12. Summary
 
-Plectica 2.0 MVP = **cards + nesting on an infinite canvas, persisted locally.**
+Ambit MVP = **cards + nesting on an infinite canvas, persisted locally.**
 
 That is all it needs to do, and it needs to do it exceptionally well. Nesting is the hard part -- technically and in terms of UX. Everything in this plan is oriented around de-risking and nailing that core mechanic.
 

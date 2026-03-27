@@ -1,4 +1,4 @@
-# Plectica 2.0 -- M2 Kickoff: Nesting
+# Ambit -- M2 Kickoff: Nesting
 
 **Author:** Maren (Technical Project Manager)
 **Date:** 2026-03-24
@@ -9,7 +9,7 @@
 
 ## M2 Goal
 
-M2 delivers the core mechanic of Plectica 2.0: cards can contain other cards. By the end of M2, a user can drag any card onto any other card to make it a part of that card's system, drag it back out to unnest it, and watch parent cards automatically expand to contain their children. Nesting works to arbitrary depth -- a card inside a card inside a card inside a card is not a special case; it is the normal case. Every nesting and unnesting operation persists immediately to SQLite. The application loads the full nested tree on startup, computes depth correctly, and renders the visual hierarchy faithfully. M2 is the milestone that makes Plectica 2.0 a DSRP tool rather than a card-management tool. Everything before this was infrastructure. This is the product.
+M2 delivers the core mechanic of Ambit: cards can contain other cards. By the end of M2, a user can drag any card onto any other card to make it a part of that card's system, drag it back out to unnest it, and watch parent cards automatically expand to contain their children. Nesting works to arbitrary depth -- a card inside a card inside a card inside a card is not a special case; it is the normal case. Every nesting and unnesting operation persists immediately to SQLite. The application loads the full nested tree on startup, computes depth correctly, and renders the visual hierarchy faithfully. M2 is the milestone that makes Ambit a DSRP tool rather than a card-management tool. Everything before this was infrastructure. This is the product.
 
 ---
 

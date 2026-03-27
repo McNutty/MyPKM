@@ -1,14 +1,14 @@
 [package]
-name = "plectica"
+name = "ambit"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "plectica_lib"
+name = "ambit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "plectica"
+name = "ambit"
 path = "src/main.rs"
 
 [build-dependencies]

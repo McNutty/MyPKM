@@ -61,7 +61,7 @@ Three properties are load-bearing in the visual representation and must never be
 
 ### Cross-Boundary Is the Point
 
-The reason Relationships are the feature that makes Plectica a systems thinking tool -- rather than a hierarchical note-taker -- is precisely that relationships can cross system boundaries. A nested hierarchy (Systems) shows you the part-whole structure of your knowledge. Relationships show you the connections between parts that may live in entirely different areas of the hierarchy. The intersection of the two is where emergent properties become visible: you can see that a part of System A acts on a part of System B, and now you understand why changes in A produce unexpected effects in B.
+The reason Relationships are the feature that makes Ambit a systems thinking tool -- rather than a hierarchical note-taker -- is precisely that relationships can cross system boundaries. A nested hierarchy (Systems) shows you the part-whole structure of your knowledge. Relationships show you the connections between parts that may live in entirely different areas of the hierarchy. The intersection of the two is where emergent properties become visible: you can see that a part of System A acts on a part of System B, and now you understand why changes in A produce unexpected effects in B.
 
 If relationships were restricted to cards within the same system (the same parent), the tool would only support intra-system connections. That is a much weaker analytical instrument. The whole power of cross-disciplinary thinking, of understanding feedback loops that traverse organizational boundaries, of seeing how a decision in one domain cascades into another -- all of this depends on relationships being able to freely cross system boundaries.
 

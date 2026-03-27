@@ -1,4 +1,4 @@
-# DSRP Data Model Spec: Plectica 2.0 MVP
+# DSRP Data Model Spec: Ambit MVP
 
 **Author:** Derek, DSRP & Systems Thinking Expert
 **Date:** 2026-03-23
@@ -9,7 +9,7 @@
 
 ## Purpose
 
-This document is the formal data model spec for Plectica 2.0 MVP (Phase 1: Distinctions + Systems). It is written for Silas to implement directly. Every design decision in this document has a DSRP grounding, stated explicitly so the rationale is not lost when implementation pressures arise.
+This document is the formal data model spec for Ambit MVP (Phase 1: Distinctions + Systems). It is written for Silas to implement directly. Every design decision in this document has a DSRP grounding, stated explicitly so the rationale is not lost when implementation pressures arise.
 
 The spec covers three tables: `nodes`, `maps`, `layout`. It does not cover Phase 2 (Relationships), Phase 3 (Perspectives), full-text search, or collaboration. What is deferred and why is stated in Section 7.
 
@@ -77,7 +77,7 @@ When a user moves a node from one parent to another (or to the top level), the i
 
 Phase 1 uses `INTEGER PRIMARY KEY` (SQLite autoincrement). This is simple, fast, and correct for single-user local-first.
 
-**Flag for future:** If Plectica ever needs multi-user sync or cloud collaboration, integer PKs assigned by a single SQLite instance will conflict. At that point, a migration to UUID v4 or v7 is required. This is a known future cost, not an oversight.
+**Flag for future:** If Ambit ever needs multi-user sync or cloud collaboration, integer PKs assigned by a single SQLite instance will conflict. At that point, a migration to UUID v4 or v7 is required. This is a known future cost, not an oversight.
 
 ---
 

@@ -18,7 +18,7 @@ This is not a blocking risk in isolation -- the parent_id migration and Model ca
 
 ## What This Plan Covers
 
-T4-23 introduces two interlocking features that together constitute a significant architectural rework of Plectica 2.0:
+T4-23 introduces two interlocking features that together constitute a significant architectural rework of Ambit:
 
 - **Models as Cards:** The canvas-switching paradigm (currently: left sidebar) is replaced by a first-class `model` card type. Models nest, organize, and are navigated like any other card -- but entering one switches the active canvas. A `Home` model is the root. Breadcrumbs replace the sidebar.
 

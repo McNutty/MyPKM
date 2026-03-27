@@ -1,5 +1,5 @@
 /**
- * Plectica 2.0 -- Layout Shell
+ * Ambit -- Layout Shell
  * ============================
  *
  * Three-panel layout: LeftSidebar | Canvas | RightSidebar

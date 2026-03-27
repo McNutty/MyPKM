@@ -1,6 +1,6 @@
 # DSRP Design Log
 
-A record of design discussions where DSRP theory directly shaped architectural decisions in Plectica 2.0. These entries document how the app's design is grounded in the DSRP framework — useful for future reference, onboarding, and communicating the tool's theoretical foundation.
+A record of design discussions where DSRP theory directly shaped architectural decisions in Ambit. These entries document how the app's design is grounded in the DSRP framework — useful for future reference, onboarding, and communicating the tool's theoretical foundation.
 
 ---
 

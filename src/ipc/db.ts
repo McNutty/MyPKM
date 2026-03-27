@@ -1,4 +1,4 @@
-// The IPC interface contract for Plectica 2.0
+// The IPC interface contract for Ambit
 // Both the Tauri Rust backend (Silas) and the frontend (Wren) build against this.
 
 /**
