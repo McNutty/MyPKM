@@ -51,6 +51,14 @@ See `team/roster.md` for the full roster.
 
 Task files live at `User input/Tasks M<N>.md`. Each file starts with a **Milestone Scope** section (summarizing the kickoff), followed by **New tasks** and **Resolved tasks**. Each task has an ID (e.g., `T4-01`) with test cases indented below it. The user adds new tasks as plain paragraphs — **Larry is responsible for assigning the next available ID and formatting them** (bold ID + title, description below).
 
+## Source Control
+
+1. **Only Larry commits.** Agents edit files and report back — they never run `git commit`.
+2. **Commit immediately after each agent completes.** One agent's work = one atomic commit. Never start a new delegation with uncommitted changes.
+3. **Build/type-check before committing.** Verify the build passes before each commit.
+4. **Feature branches for experimental work.** Create the branch BEFORE the first line of code, not retroactively. Use `feature/<name>` naming.
+5. **Check `git status` before spawning any agent.** If there are uncommitted changes, commit or stash them first.
+
 ## After Every Confirmed Fix
 
 1. **Add test cases** indented under the task in `User input/Tasks M<N>.md` BEFORE the user tests. This gives them a checklist to comment on.
