@@ -38,6 +38,22 @@ import { Card } from './Card'
 import { RelationshipOverlay } from './RelationshipLine'
 import { db } from '../ipc'
 
+// ---------------------------------------------------------------------------
+// KEYBOARD GUARD
+// Returns true when a text input, textarea, or contenteditable element has
+// focus -- keyboard shortcuts should be suppressed in that case so the user
+// can type normally without accidentally triggering canvas actions.
+// ---------------------------------------------------------------------------
+function isTextEditing(): boolean {
+  const el = document.activeElement
+  if (!el) return false
+  const tag = el.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return true
+  if ((el as HTMLElement).isContentEditable) return true
+  return false
+}
+
+
 // ============================================================================
 // FEATURE FLAGS
 // ============================================================================
@@ -462,18 +478,9 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
   // Guard: skip when a text input / textarea / contenteditable is focused so
   // Space still works normally while editing card labels.
   useEffect(() => {
-    const isTextFocused = () => {
-      const el = document.activeElement
-      if (!el) return false
-      const tag = (el as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return true
-      if ((el as HTMLElement).isContentEditable) return true
-      return false
-    }
-
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return
-      if (isTextFocused()) return
+      if (isTextEditing()) return
       if (spaceHeldRef.current) return // already held -- suppress repeated keydown events
       e.preventDefault()
       spaceHeldRef.current = true
@@ -1978,9 +1985,7 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key === 'Delete' && selectedId !== null) {
         // Guard: let the browser handle Delete normally when a text field is focused
-        const el = document.activeElement
-        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
-        if (el instanceof HTMLElement && el.isContentEditable) return
+        if (isTextEditing()) return
 
         // Don't double-trigger if the confirmation dialog is already showing
         if (deleteConfirm !== null) return
@@ -2115,24 +2120,14 @@ export const Canvas: React.FC<CanvasProps> = ({ mapId, selectedCardId, onSelectC
       // The next mousedown will pick the source card and hand off to handleConnectStart.
       if (e.key === 'r' || e.key === 'R' || e.key === 'l' || e.key === 'L') {
         // Don't fire when typing inside a text field or contenteditable
-        const active = document.activeElement
-        if (
-          active instanceof HTMLInputElement ||
-          active instanceof HTMLTextAreaElement ||
-          (active instanceof HTMLElement && active.isContentEditable)
-        ) return
+        if (isTextEditing()) return
         setConnectingMode(true)
         return
       }
 
       if (e.key !== 'c' && e.key !== 'C') return
       // Don't fire when typing inside a text field or contenteditable
-      const active = document.activeElement
-      if (
-        active instanceof HTMLInputElement ||
-        active instanceof HTMLTextAreaElement ||
-        (active instanceof HTMLElement && active.isContentEditable)
-      ) return
+      if (isTextEditing()) return
 
       // Convert the last known mouse position to canvas coordinates
       const rect = canvasRef.current?.getBoundingClientRect()
