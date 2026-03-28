@@ -26,6 +26,11 @@ export interface CardData {
   depth: number
   /** Background color (derived from depth) */
   color: string
+  /**
+   * Node type from the DB. 'card' for regular concept cards, 'model' for model
+   * cards that have a backing map you can navigate into. Defaults to 'card'.
+   */
+  nodeType: string
 }
 
 export interface CanvasViewport {

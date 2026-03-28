@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { DbInterface, MapData, NodeWithLayout, RelationshipData } from './db'
+import type { DbInterface, MapData, NodeWithLayout, RelationshipData, CreateModelResult, BreadcrumbItem } from './db'
 
 // Rust returns snake_case; we remap to camelCase to match RelationshipData.
 interface RustRelationship {
@@ -118,5 +118,26 @@ export class TauriDb implements DbInterface {
 
   async deleteMap(id: number): Promise<number> {
     return invoke<number>('delete_map', { id })
+  }
+
+  // --- Model card operations (M5) ---
+
+  async createModelCard(
+    mapId: number,
+    name: string,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): Promise<CreateModelResult> {
+    return invoke<CreateModelResult>('create_model_card', { mapId, name, x, y, width, height })
+  }
+
+  async getModelMapId(nodeId: number): Promise<number> {
+    return invoke<number>('get_model_map_id', { nodeId })
+  }
+
+  async getBreadcrumbPath(mapId: number): Promise<BreadcrumbItem[]> {
+    return invoke<BreadcrumbItem[]>('get_breadcrumb_path', { mapId })
   }
 }

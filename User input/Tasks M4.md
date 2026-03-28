@@ -27,9 +27,33 @@ Rework padding. I feel that padding should somehow be proportional to the "level
 
 **T4-23: Multiple models rework**
 This is a big one. I've been thinking about what this app is all about. Systems thinking the DSRP way. Seen through this lens (perspective) I think it would make sense to aim for an even more unified model. Imagine we introduce a new card type called "Model" instead. And the app has a "Home"-model. Then we could scrap the left sidebar entirely, and create "Models" as cards in the Home model instead. The thought occurred to me when starting to think about left sidebar organizing, grouping and reordering and so on. Why introduce another paradigm when we have worked so hard on exactly these things in the canvas context? Lets reuse that work and let the user organize their models through the canvas as well! And of course, adding models to a canvas shouldn't be strictly limited to the home-canvas, you can add them at any level. And then the current "breadcrumb" instead could show what "model-level" you are on. We need to figure out how to interact with these model-cards, what should trigger a model switch and so on. This is very much like how "Workflowy" and "Tana" work, they are infinite outliners, and I like this paradigm a lot. We could get several clues on how to handle this from those apps. What do you say?
+- Phase 1 tests (Models as Cards):
+  - 1. Press "m" → model card appears at cursor, follows mouse, click to drop - OK!
+  - 2. Model card looks visually distinct from concept cards (blue tint, icon)
+	  - Well, not really. The blue tint is not too different from cards directly on the canvas, and the icon is pretty small. Maybe Wren has some input on how to make them even more visually distinct, based on current UI patterns. 
+	  - Not a fan of the redesign at all, now it is too visually different (white text for example), and the darker blue makes it very hard to see the dotted outlines around them. Lets leave this until we get to the visual polish phase, I think we will need to think holistically about color schemes and design details as a separate milestone further down the line. Restore the first design for now.
+  - 3. Hover model card → "enter" button (→) appears; click → canvas switches to model's interior - OK!
+  - 4. Breadcrumbs show "Home > Model Name"; click Home → returns to Home canvas
+	  - No, we now have two breadcrumbs. The top one is the model one, but it says "My Canvas" instead of Home, and all models show up as "Home" instead of their name. Also, the old breadcrumb can be removed, it is not useful. I still want the "Fit"-button though with the zoom percentage.
+	  - Ok, but there is no need for two sections, one with the model breadcrumb and one with the Fit-button and percentage. Consolidate these to one section.
+  - 5. Create cards inside a model, navigate back to Home → model card still there; re-enter → cards are there - OK!
+  - 6. Create model inside model → 3+ levels deep, breadcrumbs show full path - OK!
+	  - With the caveat from test 4 about breadcrumb names.
+	  - Ok now!
+  - 7. Model cards participate in push-mode, nesting, resize — no special behavior - OK!
+  - 8. Enter key on selected model card → navigates into it - OK!
+  - 9. Home map cannot be deleted - OK!
+  - 10. Press "m" to create model, edit title, press Enter → title persists after re-entering
+	  - Hm, Enter "enters" the card instead of confirming the edit. This reminds me of the bug with the delete key deleting the card when editing the title. I think we need a general function here that disables *all* keyboard shortcuts when editing. Then refactor the "delete" guard to use the same functionality.
+  - 11. All prior M4 functionality still works (drag, nest, push, relationships, "c" key, "r"/"l" keys) - OK!
+
 Another thought. I think this feature demands another related feature, "card mirroring". I have taken the naming straight from Workflowy. This means that a card can exist in multiple places at the same time, in this case in multiple models. Or at least visual representations of it. This is a key insight that both unlocks the Perspective part of DSRP, and addresses Dereks comment about "Cross-boundary relationships". If a card can exist in many different models, it can also have relationships from many models. Each model can then be seen to represent a different perspective on the same thing. Wait a minute! The perfect name in DSRP context would be "Card Views" instead of "Card Mirrors", since a perspective in DSRP consists of a point and a view. I'd very much like yours and Dereks comment on this idea, as well as the rest of the team.
 
+**T4-24: Register Kael as an agent type**
 Get Kael registered as an agent like the others on the team, don't know why this didn't work when we hired him.
+
+**T4-25: Keyboard navigation**
+Pressing the keyboard arrows should move focus between cards. Can be a bit tricky to choose what card to start at if no card is previously selected, and also which card to jump to, but some reasonable algorithm with a focus on distance should be possible. Then in addition to Enter, I would like Alt+Down to also enter a Model card, and Alt+Up to "exit" a model, meaning moving to its parent. Also, when exiting a model, the card of the model you exited should be selected. So Alt+Up directly followed by Alt+Down should bring you back to the original model. With these additions, it will become possible to quickly navigate between cards and in and out of models just by using the keyboard.
 
 # Resolved tasks
 

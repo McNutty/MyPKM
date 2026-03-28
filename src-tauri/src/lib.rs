@@ -36,6 +36,10 @@ pub fn run() {
             commands::get_all_maps,
             commands::rename_map,
             commands::delete_map,
+            // Models Rework Phase 1
+            commands::create_model_card,
+            commands::get_model_map_id,
+            commands::get_breadcrumb_path,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Ambit");

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     parent_id   INTEGER REFERENCES nodes(id) ON DELETE RESTRICT,
     content     TEXT    NOT NULL DEFAULT '',
     node_type   TEXT    NOT NULL DEFAULT 'card'
-                        CHECK(node_type IN ('card', 'relationship')),
+                        CHECK(node_type IN ('card', 'relationship', 'model')),
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     metadata    TEXT
@@ -143,17 +143,19 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
     // schema definition still contains the old single-value CHECK.
     // This block is idempotent: once the new schema is in place, the
     // string match fails and the block is skipped on all subsequent startups.
-    let old_check_present: bool = conn
+    let nodes_sql: String = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='nodes'",
             [],
             |row| row.get::<_, String>(0),
         )
-        .map(|sql| sql.contains("CHECK(node_type IN ('card'))"))
-        .unwrap_or(false);
+        .unwrap_or_default();
 
-    if old_check_present {
-        eprintln!("[db] Migrating nodes table: expanding node_type CHECK constraint...");
+    let old_check_card_only = nodes_sql.contains("CHECK(node_type IN ('card'))");
+    let old_check_card_rel  = nodes_sql.contains("CHECK(node_type IN ('card', 'relationship'))");
+
+    if old_check_card_only || old_check_card_rel {
+        eprintln!("[db] Migrating nodes table: expanding node_type CHECK constraint to include 'model'...");
         conn.execute_batch("
             PRAGMA foreign_keys = OFF;
 
@@ -166,7 +168,7 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
                 parent_id   INTEGER REFERENCES nodes(id) ON DELETE RESTRICT,
                 content     TEXT    NOT NULL DEFAULT '',
                 node_type   TEXT    NOT NULL DEFAULT 'card'
-                                    CHECK(node_type IN ('card', 'relationship')),
+                                    CHECK(node_type IN ('card', 'relationship', 'model')),
                 created_at  TEXT    NOT NULL,
                 updated_at  TEXT    NOT NULL,
                 metadata    TEXT
@@ -186,6 +188,65 @@ pub fn init_db(app_handle: &AppHandle) -> SqlResult<Connection> {
             CREATE INDEX IF NOT EXISTS idx_nodes_node_type ON nodes(node_type);
         ")?;
         eprintln!("[db] nodes table migration complete.");
+    }
+
+    // --- 4d. Add node_id column to maps (idempotent) ---
+    // Links each map to the model card that represents it on a parent canvas.
+    // Home map (id=1) has node_id = NULL.
+    if let Err(e) = conn.execute_batch(
+        "ALTER TABLE maps ADD COLUMN node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL"
+    ) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column name") {
+            return Err(e);
+        }
+    }
+    // UNIQUE constraint can't be added via ALTER TABLE ADD COLUMN in SQLite,
+    // so we enforce it via a unique index instead.
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_maps_node_id ON maps(node_id) WHERE node_id IS NOT NULL"
+    ).map_err(|e| e)?;
+
+    // --- 4e. Seed migration: existing non-Home maps become model cards ---
+    // For every map where node_id IS NULL AND id != 1 (i.e., maps that existed
+    // before the Models Rework), we create a backing node (node_type='model') and
+    // a layout row on the Home map (id=1), then link them via maps.node_id.
+    // Idempotent: only processes maps that still have node_id IS NULL AND id != 1.
+    {
+        // Collect maps that need backfilling.
+        let mut orphan_stmt = conn.prepare(
+            "SELECT id, name FROM maps WHERE node_id IS NULL AND id != 1 ORDER BY id ASC"
+        )?;
+        let orphan_maps: Vec<(i64, String)> = orphan_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<SqlResult<Vec<_>>>()?;
+
+        for (index, (map_id, map_name)) in orphan_maps.iter().enumerate() {
+            let y_pos = 50.0 + (index as f64) * 150.0;
+
+            // Insert backing model node.
+            conn.execute(
+                "INSERT INTO nodes (parent_id, content, node_type, created_at, updated_at) \
+                 VALUES (NULL, ?1, 'model', datetime('now'), datetime('now'))",
+                rusqlite::params![map_name],
+            )?;
+            let node_id = conn.last_insert_rowid();
+
+            // Place it on the Home map.
+            conn.execute(
+                "INSERT INTO layout (node_id, map_id, x, y, width, height) \
+                 VALUES (?1, 1, 50.0, ?2, 200.0, 80.0)",
+                rusqlite::params![node_id, y_pos],
+            )?;
+
+            // Link the map to its new node.
+            conn.execute(
+                "UPDATE maps SET node_id = ?1 WHERE id = ?2",
+                rusqlite::params![node_id, map_id],
+            )?;
+
+            eprintln!("[db] Backfilled model card for map {} ('{}') → node_id={}", map_id, map_name, node_id);
+        }
     }
 
     // --- 5. Seed default map if none exists ---

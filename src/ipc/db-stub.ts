@@ -1,4 +1,4 @@
-import type { DbInterface, MapData, NodeWithLayout, RelationshipData } from './db'
+import type { DbInterface, MapData, NodeWithLayout, RelationshipData, CreateModelResult, BreadcrumbItem } from './db'
 
 export class StubDb implements DbInterface {
   private nodes: Map<number, NodeWithLayout> = new Map()
@@ -8,6 +8,8 @@ export class StubDb implements DbInterface {
   private nextLayoutId = 1
   private nextRelId = 1
   private nextMapId = 2
+  // model node_id -> backing map_id
+  private modelBacking: Map<number, number> = new Map()
 
   async getMapNodes(_mapId: number): Promise<NodeWithLayout[]> {
     // Ignores mapId for simplicity -- single map at M1
@@ -177,5 +179,62 @@ export class StubDb implements DbInterface {
     if (!this.maps.has(id)) throw new Error(`Map ${id} not found`)
     this.maps.delete(id)
     return id
+  }
+
+  // --- Model card operations (M5) ---
+
+  async createModelCard(
+    _mapId: number,
+    name: string,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): Promise<CreateModelResult> {
+    const node_id = this.nextNodeId++
+    const layout_id = this.nextLayoutId++
+    const map_id = this.nextMapId++
+
+    // Create the backing map
+    this.maps.set(map_id, { id: map_id, name })
+
+    // Create the model node
+    const node: NodeWithLayout = {
+      id: node_id,
+      parent_id: null,
+      content: name,
+      node_type: 'model',
+      metadata: null,
+      layout_id,
+      x,
+      y,
+      width,
+      height,
+    }
+    this.nodes.set(node_id, node)
+    this.modelBacking.set(node_id, map_id)
+
+    return { node_id, layout_id, map_id, name }
+  }
+
+  async getModelMapId(nodeId: number): Promise<number> {
+    const mapId = this.modelBacking.get(nodeId)
+    if (mapId === undefined) throw new Error(`No backing map for node ${nodeId}`)
+    return mapId
+  }
+
+  async getBreadcrumbPath(mapId: number): Promise<BreadcrumbItem[]> {
+    // In the stub, we only have flat maps -- no parent hierarchy.
+    // Return Home (map 1) if the target is not map 1, otherwise just Home.
+    const target = this.maps.get(mapId)
+    if (!target) throw new Error(`Map ${mapId} not found`)
+    const home = this.maps.get(1)
+    if (mapId === 1) {
+      return [{ map_id: 1, name: home?.name ?? 'Home' }]
+    }
+    return [
+      { map_id: 1, name: home?.name ?? 'Home' },
+      { map_id: mapId, name: target.name },
+    ]
   }
 }

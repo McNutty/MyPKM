@@ -50,6 +50,221 @@ import {
 import { Card } from './Card'
 
 // ============================================================================
+// PUSHING MODE HELPERS
+// ============================================================================
+
+/**
+ * Resolve collisions between a moving card and its siblings by pushing them.
+ * This is a cascade: pushed cards push other cards they collide with.
+ *
+ * Algorithm:
+ * 1. Start with the dragged card at its new position.
+ * 2. For each sibling, check if the dragged card overlaps it.
+ * 3. If so, push the sibling in the drag direction by the minimum amount needed
+ *    to eliminate the overlap.
+ * 4. Repeat for newly pushed siblings (cascade), stopping when no new overlaps
+ *    are found or max iterations are reached.
+ * 5. Clamp pushed cards: left edge >= PADDING, top edge >= PADDING.
+ *    If clamped, the dragged card itself must also stop (can't push further).
+ *
+ * @param cards     Current card map
+ * @param draggedId The card being dragged
+ * @param newX      Proposed new X for dragged card (local coords within parent)
+ * @param newY      Proposed new Y for dragged card (local coords within parent)
+ * @param dx        Movement delta X this frame
+ * @param dy        Movement delta Y this frame
+ * @returns         Updated card map (with pushed cards moved, parent auto-resized)
+ *                  and the final clamped position of the dragged card.
+ */
+function resolvePushingCollisions(
+  cards: Map<string, CardData>,
+  draggedId: string,
+  newX: number,
+  newY: number,
+  dx: number,
+  dy: number
+): { updatedCards: Map<string, CardData>; finalX: number; finalY: number } {
+  const dragged = cards.get(draggedId)
+  if (!dragged) return { updatedCards: cards, finalX: newX, finalY: newY }
+
+  // Only push siblings (same parent)
+  const parentId = dragged.parentId
+  // For root-level cards (parentId === null), siblings are all root-level cards.
+  // getChildren only accepts a string parentId, so gather root siblings manually.
+  const siblings: CardData[] = parentId !== null
+    ? getChildren(cards, parentId).filter((c) => c.id !== draggedId)
+    : Array.from(cards.values()).filter((c) => c.parentId === null && c.id !== draggedId)
+
+  // We accumulate all position deltas as a mutable working map
+  const positions = new Map<string, { x: number; y: number }>()
+  positions.set(draggedId, { x: newX, y: newY })
+  for (const s of siblings) {
+    positions.set(s.id, { x: s.x, y: s.y })
+  }
+
+  // For root-level cards, parentId is null -- no PADDING clamp applies from a
+  // parent border. For nested cards, left/top are clamped at PADDING.
+  const hasParent = parentId !== null
+
+  // Iterative collision resolution (max 20 passes to avoid infinite loops)
+  const MAX_PASSES = 20
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    let anyPushed = false
+
+    // For each card that has moved this pass, check overlaps with all other siblings
+    for (const [moverId, moverPos] of positions) {
+      const mover = cards.get(moverId)
+      if (!mover) continue
+      const moverW = mover.w
+      const moverH = mover.h
+
+      for (const [targetId, targetPos] of positions) {
+        if (targetId === moverId) continue
+        // Only push cards that are not the dragged card (dragged card only moves
+        // due to user input, not cascade; except for the stop case)
+        if (targetId === draggedId) continue
+
+        const target = cards.get(targetId)
+        if (!target) continue
+
+        // Check full AABB overlap
+        if (
+          moverPos.x < targetPos.x + target.w &&
+          moverPos.x + moverW > targetPos.x &&
+          moverPos.y < targetPos.y + target.h &&
+          moverPos.y + moverH > targetPos.y
+        ) {
+          // Penetration depths along each axis
+          // These are always positive when there is an overlap.
+          const penRight  = moverPos.x + moverW - targetPos.x          // how far mover right enters target from left
+          const penLeft   = targetPos.x + target.w - moverPos.x        // how far target right enters mover from left
+          const penBottom = moverPos.y + moverH - targetPos.y          // how far mover bottom enters target from top
+          const penTop    = targetPos.y + target.h - moverPos.y        // how far target bottom enters mover from top
+
+          let pushX = 0
+          let pushY = 0
+
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            // Primary movement is horizontal -- push target along X axis
+            if (dx > 0) {
+              // Mover moving right: target is (partially) to the right -- push it further right
+              pushX = penRight
+            } else if (dx < 0) {
+              // Mover moving left: target is (partially) to the left -- push it further left
+              pushX = -penLeft
+            }
+          }
+          if (Math.abs(dy) >= Math.abs(dx)) {
+            // Primary movement is vertical (when |dy| > |dx|, or equal -- push both axes)
+            if (dy > 0) {
+              // Mover moving down: target is (partially) below -- push it further down
+              pushY = penBottom
+            } else if (dy < 0) {
+              // Mover moving up: target is (partially) above -- push it further up
+              pushY = -penTop
+            }
+          }
+
+          // If no movement direction (shouldn't happen in pushing mode, but be safe)
+          if (dx === 0 && dy === 0) {
+            // Push along whichever axis has smaller penetration
+            if (penRight < penBottom) {
+              pushX = penRight
+            } else {
+              pushY = penBottom
+            }
+          }
+
+          if (pushX !== 0 || pushY !== 0) {
+            const current = positions.get(targetId)!
+            let newTX = current.x + pushX
+            let newTY = current.y + pushY
+
+            // Clamp at left/top boundary (PADDING if nested, 0 if root)
+            const minCoord = hasParent ? PADDING : 0
+            if (newTX < minCoord) newTX = minCoord
+            if (newTY < minCoord) newTY = minCoord
+
+            if (newTX !== current.x || newTY !== current.y) {
+              positions.set(targetId, { x: newTX, y: newTY })
+              anyPushed = true
+            }
+          }
+        }
+      }
+    }
+
+    if (!anyPushed) break
+  }
+
+  // Check if the dragged card itself is blocked by a left/top wall.
+  // This happens when we tried to push a card but it was already at the min boundary.
+  // In that case, clamp the dragged card too.
+  const draggedPos = positions.get(draggedId)!
+  const minCoord = hasParent ? PADDING : 0
+
+  // Re-check: are any siblings still overlapping the dragged card at their clamped positions?
+  // If a sibling is clamped at the left/top and still overlaps, the dragged card must stop.
+  let finalX = draggedPos.x
+  let finalY = draggedPos.y
+
+  for (const [targetId, targetPos] of positions) {
+    if (targetId === draggedId) continue
+    const target = cards.get(targetId)
+    if (!target) continue
+
+    if (
+      finalX < targetPos.x + target.w &&
+      finalX + dragged.w > targetPos.x &&
+      finalY < targetPos.y + target.h &&
+      finalY + dragged.h > targetPos.y
+    ) {
+      // Still overlapping after pushing -- dragged card must stop at the sibling boundary
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        if (dx > 0) {
+          // Moving right, blocked -- stop dragged card's right edge at sibling's left edge
+          finalX = targetPos.x - dragged.w
+        } else if (dx < 0) {
+          // Moving left, blocked -- stop dragged card's left edge at sibling's right edge
+          finalX = targetPos.x + target.w
+        }
+      }
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        if (dy > 0) {
+          // Moving down, blocked -- stop dragged card's bottom edge at sibling's top edge
+          finalY = targetPos.y - dragged.h
+        } else if (dy < 0) {
+          // Moving up, blocked -- stop dragged card's top edge at sibling's bottom edge
+          finalY = targetPos.y + target.h
+        }
+      }
+    }
+  }
+
+  // Also clamp the dragged card itself at min boundary
+  if (finalX < minCoord) finalX = minCoord
+  if (finalY < minCoord) finalY = minCoord
+
+  // Apply all position updates to a new card map
+  let updated = new Map(cards)
+  updated.set(draggedId, { ...dragged, x: finalX, y: finalY })
+  for (const [targetId, targetPos] of positions) {
+    if (targetId === draggedId) continue
+    const target = updated.get(targetId)
+    if (target && (target.x !== targetPos.x || target.y !== targetPos.y)) {
+      updated.set(targetId, { ...target, x: targetPos.x, y: targetPos.y })
+    }
+  }
+
+  // Auto-resize parent to contain all pushed cards
+  if (parentId) {
+    updated = autoResizeParent(updated, parentId)
+  }
+
+  return { updatedCards: updated, finalX, finalY }
+}
+
+// ============================================================================
 // INFINITE CANVAS COMPONENT
 // ============================================================================
 
@@ -69,6 +284,8 @@ export default function App() {
   const [isPanning, setIsPanning] = useState(false)
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const canvasRef = useRef<HTMLDivElement>(null)
+  // Track the previous canvas-space position of the dragged card for computing dx/dy in pushing mode
+  const prevDragPosRef = useRef<{ x: number; y: number } | null>(null)
 
   // ---------------------------------------------------------------------------
   // PAN & ZOOM
@@ -135,6 +352,9 @@ export default function App() {
       const canvasY = (e.clientY - rect.top - viewport.panY) / viewport.zoom
 
       const absPos = getAbsolutePosition(cards, cardId)
+
+      // Initialize previous drag position for pushing mode delta computation
+      prevDragPosRef.current = { x: absPos.x, y: absPos.y }
 
       setDragState({
         cardId,
@@ -218,6 +438,52 @@ export default function App() {
       // New absolute position of the card
       const newAbsX = canvasX - dragState.offsetX
       const newAbsY = canvasY - dragState.offsetY
+
+      // -----------------------------------------------------------------------
+      // PUSHING MODE (Shift held during drag)
+      // -----------------------------------------------------------------------
+      if (e.shiftKey) {
+        // Compute delta from previous frame for push direction
+        const prev = prevDragPosRef.current ?? { x: newAbsX, y: newAbsY }
+        const dx = newAbsX - prev.x
+        const dy = newAbsY - prev.y
+
+        setCards((prevCards) => {
+          const c = prevCards.get(dragState.cardId)
+          if (!c) return prevCards
+
+          // Convert the proposed absolute position to local coords
+          const localPos = canvasToLocal(prevCards, newAbsX, newAbsY, c.parentId)
+
+          const { updatedCards, finalX, finalY } = resolvePushingCollisions(
+            prevCards,
+            dragState.cardId,
+            localPos.x,
+            localPos.y,
+            dx,
+            dy
+          )
+
+          // Update prevDragPosRef to the card's new absolute position.
+          // We do this inside setCards so we have access to the resolved final position.
+          const finalAbsX = newAbsX + (finalX - localPos.x)
+          const finalAbsY = newAbsY + (finalY - localPos.y)
+          prevDragPosRef.current = { x: finalAbsX, y: finalAbsY }
+
+          return updatedCards
+        })
+
+        // In pushing mode, suppress nesting/unnesting -- just move within current parent
+        setDragState((prev) => (prev ? { ...prev, nestTargetId: null } : null))
+        return
+      }
+
+      // -----------------------------------------------------------------------
+      // NORMAL DRAG MODE (no Shift)
+      // -----------------------------------------------------------------------
+
+      // Update prevDragPosRef for pushing mode delta computation if user presses Shift later
+      prevDragPosRef.current = { x: newAbsX, y: newAbsY }
 
       // Detect nest target: find the smallest card whose bounds contain
       // the center of the dragged card (excluding self and descendants)
@@ -312,6 +578,8 @@ export default function App() {
       setResizeState(null)
       return
     }
+
+    prevDragPosRef.current = null
 
     if (!dragState) return
 
@@ -563,6 +831,8 @@ export default function App() {
           <b>Drag</b> cards to move. Drag <b>into</b> another card to nest.
           <br />
           Drag <b>outside</b> parent boundary to unnest.
+          <br />
+          <b>Shift+Drag</b> to push sibling cards out of the way.
           <br />
           <b>Scroll</b> to pan. <b>Ctrl+Scroll</b> to zoom.
           <br />

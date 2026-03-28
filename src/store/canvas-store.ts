@@ -57,6 +57,7 @@ export function nodeWithLayoutToCardData(node: NodeWithLayout, depth = 0): CardD
     parentId: node.parent_id,
     depth,
     color: getDepthColor(depth),
+    nodeType: node.node_type,
   }
 }
 

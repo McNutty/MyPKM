@@ -10,6 +10,25 @@ export interface MapData {
   name: string
 }
 
+/**
+ * Returned by createModelCard.
+ * A model card is a regular node (node_type='model') backed by its own map.
+ */
+export interface CreateModelResult {
+  node_id: number
+  layout_id: number
+  map_id: number
+  name: string
+}
+
+/**
+ * One item in a breadcrumb path. Home is always first; current map is last.
+ */
+export interface BreadcrumbItem {
+  map_id: number
+  name: string
+}
+
 export interface NodeWithLayout {
   id: number
   parent_id: number | null
@@ -83,4 +102,21 @@ export interface DbInterface {
    * Returns the id of the deleted map.
    */
   deleteMap(id: number): Promise<number>
+
+  // --- Model card operations (M5) ---
+  /**
+   * Create a model card: a node (node_type='model') with its own backing map.
+   * Returns node_id, layout_id, map_id, and the name (empty string on creation).
+   */
+  createModelCard(mapId: number, name: string, x: number, y: number, width: number, height: number): Promise<CreateModelResult>
+  /**
+   * Get the backing map ID for a model card node.
+   * Returns the map_id (i64 / number).
+   */
+  getModelMapId(nodeId: number): Promise<number>
+  /**
+   * Get the breadcrumb path from Home to the given map.
+   * Returns an ordered array: Home first, current map last.
+   */
+  getBreadcrumbPath(mapId: number): Promise<BreadcrumbItem[]>
 }
